@@ -1,3 +1,5 @@
+import { NuitLink } from "@/components/brand/byline";
+import { appConfig } from "@/config/app.config";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Alert } from "@/components/ui/alert";
@@ -74,6 +76,14 @@ export default async function CompanySettingsPage(props: PageProps<"/app/workspa
           letterhead={{ signatory_name: b.signatory_name, signatory_title: b.signatory_title, letterhead_footer: b.letterhead_footer }}
         />
       )}
+      <section aria-labelledby="about-harbor" className="mt-12 border-t border-border pt-6">
+        <h2 id="about-harbor" className="section-label mb-2">
+          about {appConfig.brand.name.toLowerCase()}
+        </h2>
+        <p className="text-[13px] text-subtle-foreground">
+          {appConfig.brand.name} is designed and built by <NuitLink location="settings" />.
+        </p>
+      </section>
     </div>
   );
 }

@@ -44,6 +44,12 @@ export const AVAILABLE_ROUTES = new Set<string>([
   "/app/time-off/calendar",
   "/app/payroll",
   "/app/claims",
+  "/app/hiring",
+  "/app/hiring/new",
+  "/app/joiners-leavers",
+  "/app/joiners-leavers/checklists",
+  "/app/permits",
+  "/staff/tasks",
   "/staff/pay",
   "/staff/claims",
 ]);

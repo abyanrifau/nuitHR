@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { Metadata } from "next";
 import { Logo } from "@/components/brand/logo";
+import { Byline } from "@/components/brand/byline";
 import { Blobs } from "@/components/marketing/blobs";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { Button } from "@/components/ui/button";
@@ -18,7 +19,10 @@ export default async function OnboardingLayout({ children }: { children: ReactNo
     <div className="relative isolate min-h-dvh overflow-hidden">
       <Blobs placement="wizard" className="fixed" />
       <header className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-[var(--space-gutter)]">
-        <Logo href="/onboarding" />
+        <span className="flex flex-col leading-tight">
+          <Logo href="/onboarding" />
+          <Byline location="login" />
+        </span>
         <div className="flex items-center gap-2">
           <ThemeToggle />
           <form action={signOut}>

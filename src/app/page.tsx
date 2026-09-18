@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { buttonClasses } from "@/components/ui/button";
+import { NuitLink } from "@/components/brand/byline";
 import { Blobs } from "@/components/marketing/blobs";
 import { ClockInMock, HrMock, ManagerMock, OwnerMock, RequestsMock, StaffMock } from "@/components/marketing/mocks";
 import { Reveal } from "@/components/marketing/reveal";
@@ -112,6 +113,9 @@ export default function HomePage() {
                   See how it works
                 </a>
               </div>
+              <p className="animate-rise mt-6 text-[13px] text-subtle-foreground" style={{ animationDelay: "300ms" }}>
+                {appConfig.brand.name} is built by <NuitLink location="hero" />
+              </p>
             </div>
             <div
               className="animate-rise relative mx-auto flex w-full max-w-lg items-start justify-center gap-4 sm:justify-end"

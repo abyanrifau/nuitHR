@@ -1,4 +1,5 @@
 import "server-only";
+import { nuitWorksUrl } from "@/lib/brand";
 import { appConfig } from "@/config/app.config";
 
 /**
@@ -64,7 +65,11 @@ function provider(): EmailProvider {
 }
 
 export async function sendEmail(message: EmailMessage): Promise<SendResult> {
-  return provider().send(message);
+  const text = `${message.text}
+
+--
+Sent by ${appConfig.brand.name}, built by ${appConfig.brand.byline.studio}: ${nuitWorksUrl("email")}`;
+  return provider().send({ ...message, text });
 }
 
 /** Wraps content in a simple, branded email layout. */
@@ -75,7 +80,7 @@ export function emailLayout(title: string, bodyHtml: string): string {
 <tr><td style="padding:20px 24px;border-bottom:1px solid #ebebeb;font-weight:bold;font-size:18px;letter-spacing:-0.5px;color:#000000">${escapeHtml(appConfig.brand.name)}.</td></tr>
 <tr><td style="padding:24px"><h1 style="font-size:20px;margin:0 0 12px">${escapeHtml(title)}</h1>${bodyHtml}</td></tr>
 </table>
-<p style="font-size:12px;color:#8a93a1;margin-top:16px">${escapeHtml(appConfig.brand.legalName)}</p>
+<p style="font-size:12px;color:#8a93a1;margin-top:16px">Sent by ${escapeHtml(appConfig.brand.name)}, built by <a href="${escapeHtml(nuitWorksUrl("email"))}" target="_blank" rel="noopener" style="color:#8a93a1;text-decoration:underline">${escapeHtml(appConfig.brand.byline.studio)}</a></p>
 </td></tr></table></body></html>`;
 }
 

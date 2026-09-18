@@ -18,9 +18,18 @@ export const appConfig = {
   // ----------------------------------------------------------
   brand: {
     /** Product name shown everywhere (navbar, emails, PDFs, browser tab). */
-    name: "Nuit Works",
+    name: "Harbor",
     /** Short name used on the phone home screen when staff install the app. */
-    shortName: "Nuit Works",
+    shortName: "Harbor",
+    /**
+     * The "by Nuit Works" credit. Every link to it is built by nuitWorksUrl()
+     * in src/lib/brand.ts, which adds the tracking parameters.
+     */
+    byline: {
+      text: "by Nuit Works",
+      studio: "Nuit Works",
+      url: "https://nuit.works",
+    },
     tagline: "Staff, shifts and pay, handled in one place.",
     description: "People, time, pay and paperwork for businesses in the Maldives. Answer a few questions and switch on only the tools you need.",
     /** Your company's legal name for the footer, Terms and Privacy pages. */

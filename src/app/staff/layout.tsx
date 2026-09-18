@@ -11,7 +11,7 @@ import { createClient } from "@/lib/supabase/server";
 import { portalTabs } from "@/modules/access";
 
 export const metadata: Metadata = {
-  title: { default: "Staff app", template: `%s · ${appConfig.brand.shortName}` },
+  title: { default: "Staff app", template: `%s | ${appConfig.brand.shortName}` },
   appleWebApp: { capable: true, title: appConfig.brand.shortName, statusBarStyle: "black-translucent" },
   icons: { apple: "/icons/180.png" },
 };

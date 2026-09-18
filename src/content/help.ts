@@ -510,6 +510,80 @@ export const HELP_GUIDES: HelpGuide[] = [
     ],
     wrong: ["No payslip yet: it appears once your company finalizes payroll for the month. Ask HR if it's late."],
   },
+  {
+    slug: "post-a-role",
+    title: "Post a role and share your careers page",
+    roles: ["owner", "hr"],
+    intro: "Your company gets its own careers page. Open roles you mark for it show there, and people can apply with their CV from their phone.",
+    steps: [
+      "Open Hiring and select New role. Add the title, what the job involves and, if you like, the pay range.",
+      "Tick Show on the careers page and set the status to Open, then save.",
+      "Back on Hiring, switch on your careers page and select Copy link. Share it on Facebook, Instagram or your website.",
+      "Each new application appears on the role's board and you get a notification.",
+      "Someone applied by email or walked in? On the role's board, select Add a candidate.",
+    ],
+    wrong: [
+      "The role doesn't show on the careers page: check it is Open, marked for the careers page, and the closing date hasn't passed.",
+      '"You\'ve already applied for this role": each email address can apply once per role.',
+    ],
+  },
+  {
+    slug: "hire-a-candidate",
+    title: "Move candidates along and hire",
+    roles: ["owner", "hr", "manager"],
+    intro: "The role's board has a column for each step: new, shortlisted, interview, offer and hired.",
+    steps: [
+      "Open Hiring and select the role.",
+      "Select a candidate to see their CV, rate them, add notes and plan interviews.",
+      "Move them to the next column as things progress, or select Reject.",
+      "When they accept, select Hire. Check the start date, job, department, manager and salary, then confirm.",
+      "They're added to People on probation, their CV is saved to their files and their joiner checklist starts.",
+    ],
+    wrong: ["You can't see Hire: only people allowed to add staff can hire."],
+  },
+  {
+    slug: "joiners-and-leavers",
+    title: "Use joiner and leaver checklists",
+    roles: ["owner", "hr", "manager"],
+    intro: "When someone joins or leaves, a checklist starts by itself and gives each step to HR, their manager or the person.",
+    steps: [
+      "Check the steps once in Joiners & leavers → Checklists. You can add a different checklist for a department, for example Kitchen.",
+      "A joiner checklist starts when you hire or add someone who starts in the last 30 days or later.",
+      "A leaver checklist starts when you mark someone as resigned or terminated.",
+      "Open Joiners & leavers to see who is joining and leaving and what is late. Select a person to tick steps off.",
+      "For staff who joined before you used this, select Start a checklist.",
+    ],
+    wrong: [
+      "A step says they don't have a login yet: HR can tick it, or it moves to the person once their login is linked to their profile.",
+      "Someone didn't start after all: open their checklist and select Cancel checklist.",
+    ],
+  },
+  {
+    slug: "my-tasks",
+    title: "Do your joiner and leaver tasks",
+    roles: ["staff", "manager"],
+    intro: "When someone in your team joins or leaves, or when you join yourself, you may be given a few steps to do.",
+    steps: [
+      "In the staff app, open Home and tap My tasks under Quick links.",
+      "Each task shows who it's for and when it's due.",
+      "Tap Done when it's finished. Tap the skip button if it doesn't apply.",
+    ],
+    wrong: ["You ticked one by mistake: tap the arrow next to it to open it again."],
+  },
+  {
+    slug: "permits-and-renewals",
+    title: "Track work permits, passports and renewals",
+    roles: ["owner", "hr"],
+    intro: "Add each person's work permit, passport, visa or other papers with the expiry date. You get reminders 90, 60, 30 and 7 days before, and so does the person.",
+    steps: [
+      "Open Permits & renewals and select Add.",
+      "Choose the person and what it is, then enter the number and the expiry date. Work permits have extra fields like the deposit and insurance.",
+      "Next 90 days shows what runs out soon. Expired shows anything already out of date.",
+      "When one is renewed, select Renewed and enter the new expiry date. The old one moves to History and reminders start again.",
+      "When someone leaves, select Archive so no more reminders are sent.",
+    ],
+    wrong: ["No reminder arrived: reminders go out once a day and stop for people who have left or items in History."],
+  },
 ];
 
 export function guidesFor(role: HelpRole): HelpGuide[] {

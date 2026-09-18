@@ -1,4 +1,4 @@
-# Nuit Works: HR for businesses in the Maldives
+# Harbor by Nuit Works: HR for businesses in the Maldives
 
 People, time, pay and paperwork for multiple companies (each in its own sealed "company space"). An owner signs up, answers a few questions about how they work, and gets only the tools that fit. Staff use a phone-friendly staff app.
 
@@ -27,8 +27,8 @@ People, time, pay and paperwork for multiple companies (each in its own sealed "
 | 4 | Staff app (installable phone app at `/staff`): news, requests, letters, files, directory, my details | ✅ Done |
 | 5 | Time & shifts (clock-in with location check, breaks, time fixes, roster, timesheets), Time off (requests, balances, calendar) | ✅ Done |
 | 6 | Payroll (pay runs, pension, tax, allowances, loans, payslips, bank and accounting files) and Claims (receipts, approval, payout) | ✅ Done |
-| 7 | Hiring, Joiners & leavers, Permits & renewals | Next |
-| 8 | Learning & People Development | |
+| 7 | Hiring (roles, public careers page, candidate board, interviews, hire), Joiners & leavers (automatic checklists, staff tasks) and Permits & renewals (expiry tracking, daily reminders) | ✅ Done |
+| 8 | Learning & People Development | Next |
 | 9 | Marketing website, pricing calculator, help centre | ✅ Structure and pages done early; content grows with each phase |
 | 10 | Demo data, security review, performance check, go live on Vercel | |
 
@@ -160,6 +160,17 @@ Open **http://localhost:3000/setup** in your browser. Every line should have a g
 | Claims (approve, pay separately) | `/app/claims` | rights to see claims |
 | Staff app: Pay (payslips) | `/staff/pay` | Payroll switched on, login linked to a profile |
 | Staff app: Claims (send a claim with a receipt) | `/staff/claims` | Claims switched on, login linked to a profile |
+| Hiring (roles and careers page settings) | `/app/hiring` | hiring rights |
+| New role | `/app/hiring/new` | hiring rights |
+| A role's candidate board | `/app/hiring/<role>` | hiring rights |
+| Edit a role | `/app/hiring/<role>/edit` | hiring rights |
+| Public careers page | `/careers/<company>` | anyone, once the careers page is switched on |
+| Public role page with the apply form | `/careers/<company>/<role>` | anyone |
+| Joiners & leavers | `/app/joiners-leavers` | rights to see checklists |
+| A person's checklist | `/app/joiners-leavers/<checklist>` | rights to see checklists |
+| Checklist steps (templates) | `/app/joiners-leavers/checklists` | rights to see checklists |
+| Permits & renewals | `/app/permits` | rights to see permits |
+| Staff app: My tasks | `/staff/tasks` | Joiners & leavers switched on |
 | No connection page (shown by the phone app when offline) | `/offline` | nothing |
 | Accept an invitation | `/invite/…` | the invitation link |
 | Setup check | `/setup` | nothing |
@@ -174,7 +185,8 @@ While email sending isn't set up, invitation emails are printed in the terminal 
 - **All colours, fonts, radius, spacing and the marketing colour blobs** are CSS variables in the "DESIGN TOKENS" block at the top of [`src/app/globals.css`](src/app/globals.css). Dark is the default; the `.light` block is the light theme.
 - **Blob colours** are `--blob-1` … `--blob-4` (placeholders). Blobs only appear on marketing pages, sign-in and the setup wizard, never inside the app.
 - **Fonts:** see [`public/fonts/README.txt`](public/fonts/README.txt) for the two files to add (Alte Haas Grotesk Bold, Helvetica Neue Light).
-- **Brand name** (the wordmark "Nuit Works.") comes from `brand.name` in the config file.
+- **Brand name** (the wordmark "Harbor.") comes from `brand.name` in the config file. The "by Nuit Works" credit comes from `brand.byline`.
+- **Links to Nuit Works** are all built by `nuitWorksUrl()` in `src/lib/brand.ts`. They open in a new tab and carry `utm_source=harbor&utm_medium=referral&utm_campaign=<where the link sits>` (hero, footer, login, app-sidebar, settings, staff-app, email). Change the address or parameters there once.
 
 ## Environment variables
 

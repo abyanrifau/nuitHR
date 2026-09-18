@@ -1,6 +1,7 @@
 /* eslint-disable jsx-a11y/alt-text -- PDF images, not web images; the PDF library has no alt text */
 import "server-only";
 import { Document, Image, Page, StyleSheet, Text, View, renderToBuffer } from "@react-pdf/renderer";
+import { fullBrandName } from "@/lib/brand";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { formatDate } from "@/lib/format";
 
@@ -24,6 +25,7 @@ const s = StyleSheet.create({
   row: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 2.5 },
   total: { flexDirection: "row", justifyContent: "space-between", borderTopWidth: 0.5, borderTopColor: "#999999", paddingTop: 4, marginTop: 4, fontFamily: "Helvetica-Bold" },
   net: { marginTop: 18, padding: 10, borderWidth: 1, borderColor: "#111111", flexDirection: "row", justifyContent: "space-between", fontFamily: "Helvetica-Bold", fontSize: 12 },
+  credit: { position: "absolute", bottom: 14, left: 40, right: 40, fontSize: 6, color: "#aaaaaa", textAlign: "center" },
   foot: { position: "absolute", bottom: 28, left: 40, right: 40, fontSize: 7.5, color: "#777777", textAlign: "center" },
 });
 
@@ -150,6 +152,9 @@ function Payslip({ company, run, person, lines }: PayslipData) {
         )}
         <Text style={s.foot} fixed>
           {company.footer ?? `${company.name}. This payslip was produced by computer and needs no signature.`}
+        </Text>
+        <Text style={s.credit} fixed>
+          Generated with {fullBrandName}
         </Text>
       </Page>
     </Document>

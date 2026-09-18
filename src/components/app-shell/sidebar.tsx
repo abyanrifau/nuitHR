@@ -5,6 +5,8 @@ import { usePathname } from "next/navigation";
 import { ModuleIcon } from "@/modules/icons";
 import type { IconName } from "@/modules/types";
 import { cn } from "@/lib/utils";
+import { appConfig } from "@/config/app.config";
+import { NuitLink } from "@/components/brand/byline";
 
 export interface SidebarSection {
   key: string;
@@ -50,6 +52,9 @@ export function Sidebar({ sections, onNavigate }: { sections: SidebarSection[]; 
     <nav aria-label="Main" className="flex h-full flex-col">
       <div className="flex-1 space-y-1 overflow-y-auto">{main.map(renderSection)}</div>
       {workspace && <div className="border-t border-border pt-2">{renderSection(workspace)}</div>}
+      <p className="px-3 pt-3 text-[11px] text-subtle-foreground">
+        {appConfig.brand.name} by <NuitLink location="app-sidebar" />
+      </p>
     </nav>
   );
 }

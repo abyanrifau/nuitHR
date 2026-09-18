@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Logo } from "@/components/brand/logo";
+import { NuitLink } from "@/components/brand/byline";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { appConfig } from "@/config/app.config";
 import { FOOTER_LINKS } from "./nav-links";
@@ -17,6 +18,12 @@ export function SiteFooter() {
               </Link>
             ))}
           </nav>
+          <p className="max-w-md text-[13px] text-subtle-foreground">
+            {appConfig.brand.name} is designed and built by <NuitLink location="footer" />, a web design studio in the Maldives.{" "}
+            <NuitLink location="footer" className="underline">
+              Need a website? Visit {appConfig.brand.byline.studio}
+            </NuitLink>
+          </p>
         </div>
         <div className="flex items-center justify-between gap-6 md:flex-col md:items-end">
           <ThemeToggle />

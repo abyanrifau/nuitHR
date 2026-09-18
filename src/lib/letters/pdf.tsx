@@ -1,6 +1,7 @@
 /* eslint-disable jsx-a11y/alt-text -- PDF images, not web images; the PDF library has no alt text */
 import "server-only";
 import { Document, Image, Page, StyleSheet, Text, View, renderToBuffer } from "@react-pdf/renderer";
+import { fullBrandName } from "@/lib/brand";
 
 /**
  * Draws a letter on the company letterhead: logo and details at the top,
@@ -31,6 +32,7 @@ const s = StyleSheet.create({
   sign: { marginTop: 36, flexDirection: "row", alignItems: "flex-end", gap: 24 },
   signature: { height: 46, maxWidth: 160, objectFit: "contain", marginBottom: 4 },
   stamp: { height: 78, width: 78, objectFit: "contain", opacity: 0.9 },
+  credit: { position: "absolute", bottom: 14, left: 40, right: 40, fontSize: 6, color: "#aaaaaa", textAlign: "center" },
   footer: { position: "absolute", bottom: 32, left: 56, right: 56, borderTopWidth: 0.5, borderTopColor: "#999999", paddingTop: 8, fontSize: 8, color: "#666666", textAlign: "center" },
 });
 
@@ -77,6 +79,9 @@ function Letter(p: LetterPdfInput) {
             {p.company.footer}
           </Text>
         ) : null}
+        <Text style={s.credit} fixed>
+          Generated with {fullBrandName}
+        </Text>
       </Page>
     </Document>
   );

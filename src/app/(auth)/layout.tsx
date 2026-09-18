@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { Logo } from "@/components/brand/logo";
+import { Byline } from "@/components/brand/byline";
 import { Blobs } from "@/components/marketing/blobs";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { Alert } from "@/components/ui/alert";
@@ -12,7 +13,10 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
     <div className="relative isolate flex min-h-dvh flex-col overflow-hidden">
       <Blobs placement="auth" />
       <header className="flex h-16 items-center px-[var(--space-gutter)]">
-        <Logo />
+        <span className="flex flex-col leading-tight">
+          <Logo />
+          <Byline location="login" />
+        </span>
       </header>
       <main className="flex flex-1 items-start px-[var(--space-gutter)] pt-8 pb-16 sm:justify-center sm:pt-16">
         <div className="w-full max-w-md space-y-6">

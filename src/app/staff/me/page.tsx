@@ -1,3 +1,5 @@
+import { appConfig } from "@/config/app.config";
+import { NuitLink } from "@/components/brand/byline";
 import type { Metadata } from "next";
 import { LogOut } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
@@ -107,6 +109,9 @@ export default async function StaffMe() {
         </form>
       </section>
       <p className="text-center text-[12px] text-subtle-foreground">Signed in as {user.email}</p>
+      <p className="text-center text-[12px] text-subtle-foreground">
+        {appConfig.brand.name} by <NuitLink location="staff-app" />
+      </p>
     </div>
   );
 }
