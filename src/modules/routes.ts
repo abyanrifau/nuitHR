@@ -42,6 +42,10 @@ export const AVAILABLE_ROUTES = new Set<string>([
   "/app/time/timesheets",
   "/app/time-off",
   "/app/time-off/calendar",
+  "/app/payroll",
+  "/app/claims",
+  "/staff/pay",
+  "/staff/claims",
 ]);
 
 export function isRouteAvailable(href: string): boolean {

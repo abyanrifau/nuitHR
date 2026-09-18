@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { CalendarDays, ChevronRight, Clock, FileSignature } from "lucide-react";
+import { CalendarDays, ChevronRight, Clock, FileSignature, Receipt } from "lucide-react";
 import { StatusDot } from "@/components/ui/table";
 import { Inbox, type InboxItem } from "@/app/app/requests/inbox";
 import { CancelButton } from "@/app/app/requests/stand-in";
@@ -29,7 +29,7 @@ export default async function StaffRequests() {
     amountText: i.amount != null ? formatMoney(i.amount, active.currency) : null,
     typeLabel: requestTypeLabel(i.request_type),
   }));
-  // Things staff can ask for. Claims join this list with Phase 6.
+  // Things staff can ask for, depending on the company's tools.
   const askFor = me
     ? [
         ...(active.modules.includes("leave") && can(ctx, "leave", "create", "own")
@@ -37,6 +37,9 @@ export default async function StaffRequests() {
           : []),
         ...(active.modules.includes("attendance") && can(ctx, "attendance", "create", "own")
           ? [{ href: "/staff/time#fix", label: "Fix a clock time", hint: "Forgot to clock in or out", icon: Clock }]
+          : []),
+        ...(active.modules.includes("claims") && can(ctx, "claims", "create", "own")
+          ? [{ href: "/staff/claims", label: "A claim", hint: "Taxi, meals, travel and other costs", icon: Receipt }]
           : []),
         ...(can(ctx, "letters", "create", "own") ? [{ href: "/staff/letters", label: "A letter", hint: "Salary or employment certificate, NOC and more", icon: FileSignature }] : []),
       ]

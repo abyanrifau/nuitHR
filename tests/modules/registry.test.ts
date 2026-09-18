@@ -202,6 +202,7 @@ describe("navigation adapts to switched-on tools", () => {
       "/app/people/org-chart",
       "/app/letters",
       "/app/news",
+      "/app/payroll",
       "/app/workspace/tools",
       "/app/workspace/people",
       "/app/workspace/requests",
@@ -237,7 +238,7 @@ describe("navigation adapts to switched-on tools", () => {
   it("maps URLs to their tool", () => {
     expect(moduleForPath("/app/time/roster")?.key).toBe("attendance");
     expect(moduleForPath("/app/payroll/runs/123")?.key).toBe("payroll");
-    expect(moduleForPath("/staff/requests/claim")?.key).toBe("claims");
+    expect(moduleForPath("/staff/claims")?.key).toBe("claims");
     expect(moduleForPath("/app")).toBeUndefined();
   });
 });

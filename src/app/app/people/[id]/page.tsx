@@ -22,6 +22,7 @@ import {
   LoginPanel,
   StatusPanel,
 } from "./profile-panels";
+import { PayExtrasPanel } from "./pay-extras";
 
 export const metadata: Metadata = { title: "Profile" };
 
@@ -245,9 +246,12 @@ async function EmergencyTab({ id, canEdit }: { id: string; canEdit: boolean }) {
 
 async function PayTab({ id, currency, dateFormat, canEdit, canCreate }: { id: string; currency: string; dateFormat: string; canEdit: boolean; canCreate: boolean }) {
   const supabase = await createClient();
-  const [{ data: comp }, { data: bank }] = await Promise.all([
+  const [{ data: comp }, { data: bank }, { data: extras }, { data: components }, { data: loans }] = await Promise.all([
     supabase.from("employee_compensation").select("*").eq("employee_id", id).order("effective_date", { ascending: false }),
     supabase.from("employee_bank_accounts").select("*").eq("employee_id", id).order("is_primary", { ascending: false }).limit(1),
+    supabase.from("employee_pay_components").select("id, amount, start_date, end_date, component:pay_components(name, kind, calc_type, default_amount, default_percent)").eq("employee_id", id).order("start_date", { ascending: false }),
+    supabase.from("pay_components").select("id, name, kind, calc_type, default_amount").eq("is_active", true).order("kind").order("sort").order("name"),
+    supabase.from("loans").select("id, kind, principal, installment_amount, outstanding, start_date, status, reason").eq("employee_id", id).order("start_date", { ascending: false }),
   ]);
   return (
     <div className="space-y-10">
@@ -264,6 +268,36 @@ async function PayTab({ id, currency, dateFormat, canEdit, canCreate }: { id: st
         }))}
       />
       <BankPanel employeeId={id} account={bank?.[0] ?? null} canEdit={canEdit || canCreate} />
+      <PayExtrasPanel
+        employeeId={id}
+        canEdit={canEdit || canCreate}
+        currency={currency}
+        components={(components ?? []).map((c) => ({ value: c.id, label: `${c.name} (${c.kind === "earning" ? "added" : "taken off"})`, kind: c.kind, calc: c.calc_type, amount: Number(c.default_amount) }))}
+        rows={(extras ?? []).map((x) => {
+          const c = x.component as unknown as { name: string; kind: string; calc_type: string; default_amount: number; default_percent: number | null };
+          return {
+            id: x.id,
+            name: c.name,
+            kind: c.kind,
+            amount:
+              c.calc_type === "percent_of_basic"
+                ? `${c.default_percent ?? 0}% of basic`
+                : `${formatMoney(x.amount ?? c.default_amount, currency)}${c.calc_type === "per_day_present" ? " a day" : c.calc_type === "per_hour_worked" ? " an hour" : ""}`,
+            from: formatDate(x.start_date, dateFormat),
+            to: x.end_date ? formatDate(x.end_date, dateFormat) : null,
+          };
+        })}
+        loans={(loans ?? []).map((l) => ({
+          id: l.id,
+          kind: l.kind,
+          principal: formatMoney(l.principal, currency),
+          installment: formatMoney(l.installment_amount, currency),
+          outstanding: formatMoney(l.outstanding, currency),
+          from: formatDate(l.start_date, dateFormat),
+          status: l.status,
+          reason: l.reason,
+        }))}
+      />
     </div>
   );
 }

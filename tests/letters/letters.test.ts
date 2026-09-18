@@ -42,3 +42,22 @@ describe("letters", () => {
     expect(pdf.length).toBeGreaterThan(1000);
   });
 });
+
+describe("payslips", () => {
+  it("draws a payslip PDF", async () => {
+    const { renderPayslipPdf } = await import("@/lib/payroll/payslip");
+    const pdf = await renderPayslipPdf({
+      company: { name: "Sunset Resort", address: "K. Malé", logo: null, currency: "MVR", date_format: "DD/MM/YYYY", footer: null },
+      run: { name: "September 2026 payroll", period_start: "2026-09-01", period_end: "2026-09-30", pay_date: "2026-09-28" },
+      person: { employee_name: "Sara Staff", employee_code: "E2", position_title: "Receptionist", department_name: "Front office", bank_name: "Bank of Maldives", bank_account_number: "7730000123456", paid_days: 30, period_days: 30, gross_pay: 12085, total_deductions: 840, net_pay: 11245, employer_contributions: 840 },
+      lines: [
+        { name: "Basic salary", kind: "earning", amount: 12000, quantity: 30, sort: 0 },
+        { name: "Transport claim 19 Sep", kind: "earning", amount: 85, quantity: null, sort: 60 },
+        { name: "Pension (7%)", kind: "deduction", amount: 840, quantity: null, sort: 90 },
+        { name: "Employer pension (7%)", kind: "employer_contribution", amount: 840, quantity: null, sort: 95 },
+      ],
+    });
+    expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
+    if (process.env.PAYSLIP_OUT) (await import("node:fs")).writeFileSync(process.env.PAYSLIP_OUT, pdf);
+  });
+});

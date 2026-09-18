@@ -434,6 +434,82 @@ export const HELP_GUIDES: HelpGuide[] = [
       "You can't approve a request: it may be waiting for someone else first. Check who approves what in Workspace → Who approves what.",
     ],
   },
+  {
+    slug: "run-payroll",
+    title: "Run payroll each month",
+    roles: ["owner", "hr"],
+    intro: "A pay run works out everyone's pay from their salary, allowances, time records, unpaid time off, claims and loans, then takes off pension and tax. Nothing is final until you finalize it.",
+    steps: [
+      "Before your first run, check pay day, pension and tax rates in Payroll → Pay settings, and add everyone's basic salary and bank account on their profile.",
+      "Open Payroll and select New pay run. The dates are filled in for you. Select Create and calculate.",
+      "Check the list. Select a person to see every line of their pay. Anything in red must be fixed first; yellow is worth a look.",
+      "Need a bonus or a correction? Select the person, then Add a one-off amount. To leave someone out this month, select Put on hold.",
+      "Changed something on a profile? Select Calculate again.",
+      "When it's right, select Finalize. Payslips appear in everyone's staff app, loan repayments are recorded and claims are marked paid.",
+      "Download the bank transfer list for your bank, then select Mark as paid once the money has gone.",
+    ],
+    wrong: [
+      '"No salary on their profile": add their basic salary on the Salary & bank tab, then calculate again.',
+      "A finalized run was wrong: select Reverse with a reason. Loans and claims go back, and you can create the run again.",
+      "Pension or tax looks wrong: the rates are starting points. Check them with the Pension Office and MIRA and update them in Pay settings.",
+    ],
+  },
+  {
+    slug: "allowances-and-loans",
+    title: "Add allowances, deductions and loans",
+    roles: ["owner", "hr"],
+    intro: "Regular extras like housing or food allowance, and loans or salary advances, are set on each person's profile and included in every pay run.",
+    steps: [
+      "First add the pay items your company uses in Payroll → Pay settings, for example Housing allowance or Uniform deduction.",
+      "Open the person in People, then the Salary & bank tab.",
+      "Under Allowances and deductions, select Add, choose the item and the monthly amount, and the date it starts.",
+      "Under Loans and advances, select Add, enter the amount and how much to take off each month.",
+      "To stop an allowance, select Stop. Loans can be paused or cancelled.",
+    ],
+    wrong: ["You can't see the Salary & bank tab: only people the owner allows can see and change pay."],
+  },
+  {
+    slug: "send-a-claim",
+    title: "Send a claim",
+    roles: ["staff"],
+    intro: "Get paid back for work costs like taxis, meals and travel.",
+    steps: [
+      "In the staff app, open Requests and choose A claim.",
+      "Choose the type, the date and the amount. For transport, add where from and to.",
+      "Take a photo of the receipt.",
+      "Tap Send claim. Your manager approves it, and it's paid with your next pay (or separately, if your company does that).",
+    ],
+    wrong: [
+      '"Claims can be up to…": that type has a limit. Split it or speak to your manager.',
+      "It says it will be paid next month: it was sent after this month's cut-off day.",
+    ],
+  },
+  {
+    slug: "approve-and-pay-claims",
+    title: "Approve and pay claims",
+    roles: ["owner", "hr", "manager"],
+    intro: "Claims arrive in Requests and on the Claims page, with the receipt photo.",
+    steps: [
+      "Open Claims. Waiting shows claims to decide. Select the paperclip to see the receipt.",
+      "Select Approve, or Decline with a note.",
+      "Approved claims paid through payroll are added to the next pay run automatically.",
+      "For claims you pay separately, open To be paid, tick them, and select Mark as paid once you've paid them.",
+      "Limits, cut-off days and whether each type is paid through payroll are in Claims → Claim types.",
+    ],
+    wrong: ["A claim isn't on the pay run: check it's approved and its type is paid through payroll, then calculate the run again."],
+  },
+  {
+    slug: "your-payslip",
+    title: "See your payslip",
+    roles: ["staff"],
+    intro: "Your payslips are in the staff app as soon as payroll is finalized each month.",
+    steps: [
+      "Tap Pay at the bottom of the staff app.",
+      "The top shows your last pay. Tap Open payslip to see or save the PDF.",
+      "Older payslips are listed underneath.",
+    ],
+    wrong: ["No payslip yet: it appears once your company finalizes payroll for the month. Ask HR if it's late."],
+  },
 ];
 
 export function guidesFor(role: HelpRole): HelpGuide[] {

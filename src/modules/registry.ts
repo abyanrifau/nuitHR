@@ -623,7 +623,7 @@ export const MODULES: ModuleDefinition[] = [
     resources: [{ key: "claims", label: "Claims", description: "Submit, approve and pay back claims.", actions: ALL, employeeScoped: true }],
     nav: [{ label: "Claims", href: "/app/claims", icon: "receipt", requires: { resource: "claims", action: "view" } }],
     portal: [
-      { label: "New claim", href: "/staff/requests/claim", icon: "receipt", homeAction: true, requires: { resource: "claims", action: "create" } },
+      { label: "Claims", href: "/staff/claims", icon: "receipt", homeAction: true, requires: { resource: "claims", action: "create" } },
     ],
     widgets: [{ key: "claims_to_pay", label: "Claims to be paid", section: "attention", requires: { resource: "claims", action: "view" } }],
     notifications: [

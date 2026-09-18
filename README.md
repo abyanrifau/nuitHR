@@ -26,8 +26,8 @@ People, time, pay and paperwork for multiple companies (each in its own sealed "
 | 3 | Foundation: people, org chart, access & roles, requests, letters & files, company settings, notifications, news, activity log, data export, two-step sign-in, support | ✅ Done |
 | 4 | Staff app (installable phone app at `/staff`): news, requests, letters, files, directory, my details | ✅ Done |
 | 5 | Time & shifts (clock-in with location check, breaks, time fixes, roster, timesheets), Time off (requests, balances, calendar) | ✅ Done |
-| 6 | Payroll, Claims | Next |
-| 7 | Recruitment, Onboarding, Compliance | |
+| 6 | Payroll (pay runs, pension, tax, allowances, loans, payslips, bank and accounting files) and Claims (receipts, approval, payout) | ✅ Done |
+| 7 | Hiring, Joiners & leavers, Permits & renewals | Next |
 | 8 | Learning & People Development | |
 | 9 | Marketing website, pricing calculator, help centre | ✅ Structure and pages done early; content grows with each phase |
 | 10 | Demo data, security review, performance check, go live on Vercel | |
@@ -155,6 +155,11 @@ Open **http://localhost:3000/setup** in your browser. Every line should have a g
 | Timesheets (add up a period, approve, download) | `/app/time/timesheets` | rights to see time records |
 | Time off (requests, balances, enter time off, new year) | `/app/time-off` | rights to see time off |
 | Time off calendar | `/app/time-off/calendar` | rights to see time off |
+| Payroll (pay runs) | `/app/payroll` | payroll rights (owner-granted) |
+| A pay run (check, adjust, finalize, reverse, downloads) | `/app/payroll/<run>` | payroll rights |
+| Claims (approve, pay separately) | `/app/claims` | rights to see claims |
+| Staff app: Pay (payslips) | `/staff/pay` | Payroll switched on, login linked to a profile |
+| Staff app: Claims (send a claim with a receipt) | `/staff/claims` | Claims switched on, login linked to a profile |
 | No connection page (shown by the phone app when offline) | `/offline` | nothing |
 | Accept an invitation | `/invite/…` | the invitation link |
 | Setup check | `/setup` | nothing |
