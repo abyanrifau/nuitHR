@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 /** Tables: hairline row dividers, muted uppercase column labels, subtle row hover. No zebra stripes. */
 export function Table({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cn("overflow-x-auto rounded-xl border border-border", className)}>
+    <div className={cn("relative overflow-x-auto rounded-xl border border-border", className)}>
       <table className="w-full text-left text-sm">{children}</table>
     </div>
   );

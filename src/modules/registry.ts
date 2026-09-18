@@ -471,7 +471,7 @@ export const MODULES: ModuleDefinition[] = [
       { label: "Time off", href: "/app/time-off", icon: "calendar", requires: { resource: "leave", action: "view" } },
       { label: "Time off calendar", href: "/app/time-off/calendar", icon: "calendar-range", requires: { resource: "leave", action: "view" } },
     ],
-    portal: [],
+    portal: [{ label: "Time off", href: "/staff/time-off", icon: "calendar", homeAction: true }],
     widgets: [{ key: "off_today", label: "Who's off", section: "today", requires: { resource: "leave", action: "view" } }],
     notifications: [
       {

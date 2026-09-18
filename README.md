@@ -25,8 +25,8 @@ People, time, pay and paperwork for multiple companies (each in its own sealed "
 | 2 | Sign-up, question-based setup, Workspace → Tools | ✅ Done (restructured) |
 | 3 | Foundation: people, org chart, access & roles, requests, letters & files, company settings, notifications, news, activity log, data export, two-step sign-in, support | ✅ Done |
 | 4 | Staff app (installable phone app at `/staff`): news, requests, letters, files, directory, my details | ✅ Done |
-| 5 | Time & shifts, Time off | Next |
-| 6 | Payroll, Transport Allowance, Expense Claims | |
+| 5 | Time & shifts (clock-in with location check, breaks, time fixes, roster, timesheets), Time off (requests, balances, calendar) | ✅ Done |
+| 6 | Payroll, Claims | Next |
 | 7 | Recruitment, Onboarding, Compliance | |
 | 8 | Learning & People Development | |
 | 9 | Marketing website, pricing calculator, help centre | ✅ Structure and pages done early; content grows with each phase |
@@ -148,6 +148,13 @@ Open **http://localhost:3000/setup** in your browser. Every line should have a g
 | Staff app: Directory | `/staff/directory` | signed in |
 | Staff app: Me (contact details, emergency contacts, notifications, two-step sign-in) | `/staff/me` | signed in |
 | Staff app: Notifications | `/staff/notifications` | signed in |
+| Staff app: Time (clock in and out, breaks, your shifts, ask for a time fix) | `/staff/time` | Time & shifts switched on, login linked to a profile |
+| Staff app: Time off (balances, ask for time off) | `/staff/time-off` | Time off switched on, login linked to a profile |
+| Time (who's in today, fix a day) | `/app/time` | rights to see time records |
+| Roster (weekly shifts, publish) | `/app/time/roster` | rights to see the roster |
+| Timesheets (add up a period, approve, download) | `/app/time/timesheets` | rights to see time records |
+| Time off (requests, balances, enter time off, new year) | `/app/time-off` | rights to see time off |
+| Time off calendar | `/app/time-off/calendar` | rights to see time off |
 | No connection page (shown by the phone app when offline) | `/offline` | nothing |
 | Accept an invitation | `/invite/…` | the invitation link |
 | Setup check | `/setup` | nothing |

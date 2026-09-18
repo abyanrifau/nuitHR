@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ChevronRight, FileSignature } from "lucide-react";
+import { CalendarDays, ChevronRight, Clock, FileSignature } from "lucide-react";
 import { StatusDot } from "@/components/ui/table";
 import { Inbox, type InboxItem } from "@/app/app/requests/inbox";
 import { CancelButton } from "@/app/app/requests/stand-in";
@@ -29,8 +29,18 @@ export default async function StaffRequests() {
     amountText: i.amount != null ? formatMoney(i.amount, active.currency) : null,
     typeLabel: requestTypeLabel(i.request_type),
   }));
-  // Things staff can ask for. Time off and claims join this list when those tools are built.
-  const askFor = [...(me && can(ctx, "letters", "create", "own") ? [{ href: "/staff/letters", label: "A letter", hint: "Salary or employment certificate, NOC and more", icon: FileSignature }] : [])];
+  // Things staff can ask for. Claims join this list with Phase 6.
+  const askFor = me
+    ? [
+        ...(active.modules.includes("leave") && can(ctx, "leave", "create", "own")
+          ? [{ href: "/staff/time-off", label: "Time off", hint: "Annual leave, sick days and more", icon: CalendarDays }]
+          : []),
+        ...(active.modules.includes("attendance") && can(ctx, "attendance", "create", "own")
+          ? [{ href: "/staff/time#fix", label: "Fix a clock time", hint: "Forgot to clock in or out", icon: Clock }]
+          : []),
+        ...(can(ctx, "letters", "create", "own") ? [{ href: "/staff/letters", label: "A letter", hint: "Salary or employment certificate, NOC and more", icon: FileSignature }] : []),
+      ]
+    : [];
 
   return (
     <div className="space-y-8">

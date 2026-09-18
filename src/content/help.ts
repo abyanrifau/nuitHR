@@ -352,6 +352,88 @@ export const HELP_GUIDES: HelpGuide[] = [
       "Your request was declined: the note from the person who declined it is shown under the request.",
     ],
   },
+  {
+    slug: "clock-in",
+    title: "Clock in and out on your phone",
+    roles: ["staff"],
+    intro: "Open the staff app and use the Time tab. It checks where you are if your company uses location check, and works out if you're late or doing overtime.",
+    steps: [
+      "Tap Time at the bottom of the staff app.",
+      "Tap Clock in when you start. If your phone asks to share your location, allow it. Some companies also ask for a quick photo.",
+      "Tap Start break and End break for your breaks, if your company tracks them.",
+      "Tap Clock out when you finish. You'll see how long you worked.",
+      "Forgot to clock in or out? Scroll down to Forgot to clock in or out, fill in the times and what happened, and send it to your manager.",
+    ],
+    wrong: [
+      '"You need to be at…": you\'re outside your work location. Clock in when you arrive, or ask your manager to fix the time.',
+      "It says you're already clocked in: clock out first, or ask for a fix if you forgot yesterday.",
+      "Location doesn't work: in your phone's settings, allow location for your browser or the app.",
+    ],
+  },
+  {
+    slug: "ask-for-time-off",
+    title: "Ask for time off",
+    roles: ["staff"],
+    intro: "You can see what you have left and ask for time off from your phone.",
+    steps: [
+      "In the staff app, open Requests and choose Time off (or tap Time off on Home).",
+      "Your balances are at the top. The number is what you can still ask for.",
+      "Choose the type, first and last day, and whether any day is a half day. The app shows how many working days it uses. Rest days and public holidays don't count.",
+      "Add a note, and a document if the type needs one (for example a medical certificate for longer sick leave).",
+      "Tap Send request. You'll get a notification when your manager answers.",
+    ],
+    wrong: [
+      '"Not enough … left": you\'ve used or asked for more days than you have. Choose fewer days or ask HR.',
+      '"You already have time off on some of those days": you have another request for those dates. Cancel it first in Your time off.',
+    ],
+  },
+  {
+    slug: "roster-and-time",
+    title: "Plan the roster and check who's in",
+    roles: ["owner", "hr", "manager"],
+    intro: "Put shifts on a weekly roster, publish it so staff see it, and follow clock-ins on the Time page.",
+    steps: [
+      "First add your shifts in Workspace → Tools → Time & shifts, for example Morning 07:00 to 15:00.",
+      "Open Time → Roster. Pick a shift or Rest day for each person and day. Each change saves straight away.",
+      "Use Copy last week to start from the previous week. Select Publish when you're ready; staff see published shifts in their app.",
+      "The Time page shows who's in, who's late, who hasn't arrived and anything that needs checking, like a clock-in outside the work location.",
+      "To fix a day yourself, select the pencil next to the person. Late minutes, hours and overtime are worked out for you.",
+    ],
+    wrong: [
+      "Staff can't see their shifts: the week isn't published yet. Select Publish on the roster.",
+      "Lateness looks wrong: check the person was on the right shift that day, and the grace period in Workspace → Tools → Time & shifts.",
+    ],
+  },
+  {
+    slug: "timesheets",
+    title: "Prepare and approve timesheets",
+    roles: ["owner", "hr"],
+    intro: "Timesheets add up each person's days, hours, lateness and overtime for a period. Approved timesheets are what payroll uses.",
+    steps: [
+      "Open Time → Timesheets.",
+      "Choose the period, for example the 1st to the last day of the month, and select Add up this period.",
+      "Check the numbers. If a day is wrong, fix it on the Time page and add up again.",
+      "Select Approve on each person, or Approve all. Download CSV if you want a copy.",
+    ],
+    wrong: ["A number didn't change after you fixed a day: approved timesheets are locked. Select Reopen, then add up again."],
+  },
+  {
+    slug: "manage-time-off",
+    title: "Approve time off and keep balances right",
+    roles: ["owner", "hr", "manager"],
+    intro: "Requests arrive in Requests and on the Time off page. Balances update themselves when you approve, decline or cancel.",
+    steps: [
+      "Open Time off. Waiting requests show Approve and Decline. The Calendar shows who else is off, so you can spot clashes.",
+      "To enter time off for someone who told you in person, select Enter time off. It's approved straight away.",
+      "On the Balances tab you can see everyone's days left. Select Change a balance to add or take away days, with a reason.",
+      "At the start of a new year, open that year on the Balances tab and select Set up. Unused days carry over up to each type's limit.",
+      "To cancel approved time off (for example someone came back early), select Cancel on the request. The days go back.",
+    ],
+    wrong: [
+      "A balance looks too low: hover over it to see what was given, carried over, changed and used.",
+      "You can't approve a request: it may be waiting for someone else first. Check who approves what in Workspace → Who approves what.",
+    ],
+  },
 ];
 
 export function guidesFor(role: HelpRole): HelpGuide[] {
