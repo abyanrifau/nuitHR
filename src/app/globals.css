@@ -1,26 +1,333 @@
 @import "tailwindcss";
 
+/*
+ * ================================================================
+ *  DESIGN TOKENS: the one place to change colours, fonts, radius,
+ *  spacing and the marketing colour blobs.
+ *
+ *  Dark is the default. Light mode is a clean inversion, switched
+ *  with the theme toggle (the "light" class on <html>).
+ * ================================================================
+ */
+
+/* ---------------------------------------------------------------
+ * Fonts (self-hosted from /public/fonts, see README → Fonts)
+ * ------------------------------------------------------------- */
+@font-face {
+  font-family: "Alte Haas Grotesk";
+  src:
+    local("Alte Haas Grotesk Bold"),
+    local("AlteHaasGrotesk-Bold"),
+    url("/fonts/AlteHaasGroteskBold.woff2") format("woff2"),
+    url("/fonts/AlteHaasGroteskBold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Helvetica Neue Light";
+  src:
+    local("Helvetica Neue Light"),
+    local("HelveticaNeue-Light"),
+    url("/fonts/HelveticaNeue-Light.woff2") format("woff2");
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Dark is the default; the toggle adds "light" for the inverted theme. */
+@custom-variant dark (&:where(:not(.light), :not(.light) *));
+@custom-variant light (&:where(.light, .light *));
+
 :root {
+  /* Typography */
+  --font-display: "Alte Haas Grotesk", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-body: "Helvetica Neue Light", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --weight-body: 300;
+  --weight-display: 700;
+  --tracking-display: -0.025em;
+  --leading-display: 1.05;
+  --leading-body: 1.6;
+  --measure: 60ch;
+
+  /* Type scale */
+  --text-hero: clamp(2.75rem, 7vw, 6rem); /* 44px mobile → 96px desktop */
+  --text-section: clamp(2rem, 4vw, 2.5rem); /* ~40px */
+  --text-card: 1.125rem; /* 18px */
+  --text-body: 1rem; /* 16px */
+  --text-caption: 0.8125rem; /* 13px */
+  --text-label: 0.75rem; /* 12px */
+
+  /* Shape */
+  --radius-sm: 6px; /* buttons, inputs, small elements */
+  --radius-md: 10px; /* cards, panels, modals */
+
+  /* Spacing rhythm for marketing sections */
+  --space-section: clamp(5rem, 12vw, 10rem);
+  --space-gutter: clamp(1rem, 4vw, 3rem);
+
+  /* ---- Dark theme (default) ---- */
+  --background: #000000;
+  --surface: #0a0a0a;
+  --surface-muted: #111111; /* raised: dropdowns, modals, hovers */
+  --surface-raised: #111111;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16); /* hover / input borders */
+  --foreground: #ffffff;
+  --muted-foreground: rgba(255, 255, 255, 0.6);
+  /* 0.5 (not 0.4) so captions pass WCAG AA contrast (≈5.3:1 on black) */
+  --subtle-foreground: rgba(255, 255, 255, 0.5);
+
+  /* The "accent" is white itself: primary buttons are white with black text. */
+  --accent: #ffffff;
+  --accent-foreground: #000000;
+  --accent-soft: rgba(255, 255, 255, 0.06);
+  --accent-border: rgba(255, 255, 255, 0.9);
+
+  /* Status colours: only where they carry meaning */
+  --success: #4ade80;
+  --warning: #facc15;
+  --danger: #f87171;
+  --info: #93c5fd;
+  --success-soft: rgba(74, 222, 128, 0.1);
+  --warning-soft: rgba(250, 204, 21, 0.1);
+  --danger-soft: rgba(248, 113, 113, 0.1);
+  --info-soft: rgba(147, 197, 253, 0.1);
+
+  --ring: rgba(255, 255, 255, 0.85);
+  --shadow-sm: none;
+  --shadow-md: none;
+
+  /* Marketing colour blobs (placeholders, replace with your own) */
+  --blob-1: #3b2bff;
+  --blob-2: #ff4fd8;
+  --blob-3: #00c2ff;
+  --blob-4: #ff8a3d;
+  --blob-opacity: 0.32;
+  --grain-opacity: 0.06;
+}
+
+/* ---- Light theme: a clean inversion ---- */
+.light {
   --background: #ffffff;
-  --foreground: #171717;
+  --surface: #f5f5f5;
+  --surface-muted: #ededed;
+  --surface-raised: #ffffff;
+  --border: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.18);
+  --foreground: #000000;
+  --muted-foreground: rgba(0, 0, 0, 0.62);
+  --subtle-foreground: rgba(0, 0, 0, 0.56); /* ≈5:1 on white */
+
+  --accent: #000000;
+  --accent-foreground: #ffffff;
+  --accent-soft: rgba(0, 0, 0, 0.05);
+  --accent-border: rgba(0, 0, 0, 0.9);
+
+  /* Darker status tones so they stay readable on white */
+  --success: #15803d;
+  --warning: #a16207;
+  --danger: #b91c1c;
+  --info: #1d4ed8;
+  --success-soft: rgba(21, 128, 61, 0.08);
+  --warning-soft: rgba(161, 98, 7, 0.08);
+  --danger-soft: rgba(185, 28, 28, 0.08);
+  --info-soft: rgba(29, 78, 216, 0.08);
+
+  --ring: rgba(0, 0, 0, 0.85);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 8px 24px -8px rgba(0, 0, 0, 0.12);
+  --blob-opacity: 0.16;
+  --grain-opacity: 0.04;
 }
 
 @theme inline {
   --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-surface-raised: var(--surface-raised);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-subtle-foreground: var(--subtle-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-border: var(--accent-border);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-ring: var(--ring);
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  /* rounded-lg = small elements (6px), rounded-xl = cards & modals (10px) */
+  --radius-md: 4px;
+  --radius-lg: var(--radius-sm);
+  --radius-xl: var(--radius-md);
+  --font-sans: var(--font-body);
+  --font-display: var(--font-display);
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  color-scheme: dark;
+  background: var(--background);
+}
+html.light {
+  color-scheme: light;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-body);
+  font-weight: var(--weight-body);
+  line-height: var(--leading-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Headings, buttons and emphasis use the display face. */
+h1,
+h2,
+h3,
+h4,
+button,
+strong,
+b,
+th,
+.font-display {
+  font-family: var(--font-display);
+  font-weight: var(--weight-display);
+}
+h1,
+h2,
+h3,
+.font-display {
+  letter-spacing: var(--tracking-display);
+  line-height: var(--leading-display);
+}
+/* Body text inside buttons/cards that are clickable (e.g. descriptions). */
+.font-body {
+  font-family: var(--font-body);
+  font-weight: var(--weight-body);
+  letter-spacing: normal;
+}
+/* Form controls use the body face even though buttons don't. */
+input,
+select,
+textarea,
+option {
+  font-family: var(--font-body);
+  font-weight: var(--weight-body);
+}
+label,
+legend {
+  font-weight: var(--weight-body);
+}
+
+/* ---------------------------------------------------------------
+ * Reusable type styles
+ * ------------------------------------------------------------- */
+@utility text-hero {
+  font-family: var(--font-display);
+  font-weight: var(--weight-display);
+  font-size: var(--text-hero);
+  letter-spacing: -0.03em;
+  line-height: 1.02;
+}
+@utility text-section {
+  font-family: var(--font-display);
+  font-weight: var(--weight-display);
+  font-size: var(--text-section);
+  letter-spacing: -0.025em;
+  line-height: 1.05;
+}
+/* Small muted section labels, e.g. "modules", "how it works" */
+@utility section-label {
+  font-family: var(--font-body);
+  font-weight: 400;
+  font-size: var(--text-label);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--subtle-foreground);
+}
+@utility measure {
+  max-width: var(--measure);
+}
+/* Numbers line up in tables and stats. */
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Visible keyboard focus everywhere. */
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--foreground);
+  color: var(--background);
+}
+
+/* ---------------------------------------------------------------
+ * Motion (all disabled with "reduce motion")
+ * ------------------------------------------------------------- */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@utility animate-rise {
+  animation: rise 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+@keyframes blob-drift-a {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(-6%, 5%, 0) scale(1.08);
+  }
+}
+@keyframes blob-drift-b {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1.04);
+  }
+  50% {
+    transform: translate3d(7%, -4%, 0) scale(0.96);
+  }
+}
+@keyframes blob-drift-c {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(0.98);
+  }
+  50% {
+    transform: translate3d(-4%, -6%, 0) scale(1.06);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
