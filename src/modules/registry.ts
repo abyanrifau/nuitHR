@@ -719,10 +719,17 @@ export const MODULES: ModuleDefinition[] = [
     portal: [
       { label: "My goals", href: "/staff/goals", icon: "target", requires: { resource: "goals", action: "view" } },
       { label: "My reviews", href: "/staff/reviews", icon: "clipboard-check", requires: { resource: "reviews", action: "view" } },
+      { label: "Surveys", href: "/staff/surveys", icon: "message-square" },
     ],
     widgets: [{ key: "review_progress", label: "Review progress", section: "month", requires: { resource: "reviews", action: "view" } }],
     notifications: [
       { key: "review.opened", label: "Time for your review", description: "When a review round opens.", defaultChannels: ["in_app", "email"] },
+      {
+        key: "review.self_done",
+        label: "Self review sent",
+        description: "When someone you review sends their self review.",
+        defaultChannels: ["in_app", "email"],
+      },
       {
         key: "review.shared",
         label: "Your review is ready",
@@ -781,6 +788,7 @@ export const NOTIFICATION_AUDIENCE: Record<string, { resource: string; action: P
   "leave.requested": { resource: "leave", action: "approve" },
   "compliance.expiring": { resource: "compliance", action: "view", scope: "team" },
   "payroll.finalized": { resource: "payroll", action: "view" },
+  "review.self_done": { resource: "reviews", action: "edit", scope: "team" },
 };
 
 /** Old tool keys that were merged into new ones. */

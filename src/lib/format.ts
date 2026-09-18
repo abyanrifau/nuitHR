@@ -66,3 +66,17 @@ export function localDay(value: string | Date, timeZone = "Indian/Maldives"): st
 export function today(timeZone?: string): string {
   return localDay(new Date(), timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone);
 }
+
+/** The moment a calendar day ends (midnight after it) in a time zone, as an ISO timestamp. */
+export function endOfDayIn(day: string, timeZone = "Indian/Maldives"): string {
+  const next = new Date(`${day}T00:00:00Z`);
+  next.setUTCDate(next.getUTCDate() + 1);
+  // Find the zone's offset at that moment, then shift UTC midnight by it.
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", { timeZone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })
+      .formatToParts(next)
+      .map((p) => [p.type, p.value]),
+  );
+  const asLocal = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute, +parts.second);
+  return new Date(next.getTime() - (asLocal - next.getTime())).toISOString();
+}

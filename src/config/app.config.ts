@@ -38,8 +38,10 @@ export const appConfig = {
     salesEmail: "hello@example.com",
     /** WhatsApp number with country code, digits only (used for the chat button). */
     whatsappNumber: "9607000000",
-    /** The public web address once deployed (no trailing slash). */
-    siteUrl: "https://example.com",
+    /** The public web address (no trailing slash). Link previews and search results use it. */
+    siteUrl: "https://harbor.nuit.works",
+    /** The short description in link previews (WhatsApp, iMessage, Discord…) and search results. */
+    shareDescription: "HR, time, leave and payroll in one place, built for businesses in the Maldives.",
   },
 
   // ----------------------------------------------------------

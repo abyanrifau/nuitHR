@@ -28,9 +28,9 @@ People, time, pay and paperwork for multiple companies (each in its own sealed "
 | 5 | Time & shifts (clock-in with location check, breaks, time fixes, roster, timesheets), Time off (requests, balances, calendar) | ✅ Done |
 | 6 | Payroll (pay runs, pension, tax, allowances, loans, payslips, bank and accounting files) and Claims (receipts, approval, payout) | ✅ Done |
 | 7 | Hiring (roles, public careers page, candidate board, interviews, hire), Joiners & leavers (automatic checklists, staff tasks) and Permits & renewals (expiry tracking, daily reminders) | ✅ Done |
-| 8 | Learning & People Development | Next |
+| 8 | Training (courses, quizzes, certificates, paid training), Reviews & goals (review rounds, goals) and Surveys (anonymous, with results hidden for small groups) | ✅ Done |
 | 9 | Marketing website, pricing calculator, help centre | ✅ Structure and pages done early; content grows with each phase |
-| 10 | Demo data, security review, performance check, go live on Vercel | |
+| 10 | Demo data, security review, performance check, go live on Vercel | Next |
 
 ---
 
@@ -171,6 +171,23 @@ Open **http://localhost:3000/setup** in your browser. Every line should have a g
 | Checklist steps (templates) | `/app/joiners-leavers/checklists` | rights to see checklists |
 | Permits & renewals | `/app/permits` | rights to see permits |
 | Staff app: My tasks | `/staff/tasks` | Joiners & leavers switched on |
+| Training (courses) | `/app/training` | rights to manage courses |
+| New course | `/app/training/new` | rights to manage courses |
+| A course (lessons, quiz questions, who takes it, progress) | `/app/training/<course>` | rights to manage courses |
+| Paid training | `/app/training/paid` | rights to see paid training |
+| Reviews (review rounds) | `/app/reviews` | rights to see reviews |
+| A review round | `/app/reviews/<round>` | rights to see reviews |
+| One person's review (manager part, share) | `/app/reviews/review/<review>` | their manager, or rights to edit reviews |
+| Goals | `/app/reviews/goals` | rights to see goals |
+| Surveys | `/app/reviews/surveys` | rights to run surveys |
+| New survey | `/app/reviews/surveys/new` | rights to run surveys |
+| A survey (edit a draft, or see results) | `/app/reviews/surveys/<survey>` | rights to run surveys |
+| Staff app: My courses (and paid training requests) | `/staff/courses` | Training switched on |
+| Staff app: take a course | `/staff/courses/<course>` | the course is assigned to you |
+| Staff app: certificate (PDF) | `/staff/courses/<course>/certificate` | you finished the course |
+| Staff app: My goals | `/staff/goals` | Reviews & goals switched on |
+| Staff app: My reviews | `/staff/reviews` | Reviews & goals switched on |
+| Staff app: Surveys | `/staff/surveys` | Reviews & goals switched on |
 | No connection page (shown by the phone app when offline) | `/offline` | nothing |
 | Accept an invitation | `/invite/…` | the invitation link |
 | Setup check | `/setup` | nothing |
