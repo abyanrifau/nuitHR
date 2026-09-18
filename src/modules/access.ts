@@ -7,7 +7,7 @@
  * These checks decide what to SHOW. The database (Row Level Security)
  * separately decides what data can actually be read or changed.
  */
-import { MODULES, STAGES } from "./registry";
+import { MODULES, NOTIFICATION_AUDIENCE, STAGES } from "./registry";
 import { isRouteAvailable } from "./routes";
 import type {
   ModuleDefinition,
@@ -93,15 +93,17 @@ export function adminNavigation(ctx: AccessContext, opts: { onlyBuilt?: boolean 
 }
 
 /** Staff app items (bottom tabs Home, Time, Requests, Pay, Me, plus extras). */
-export function portalNavigation(ctx: AccessContext): (PortalItem & { moduleKey: ModuleKey })[] {
-  return enabledModules(ctx).flatMap((m) => m.portal.filter((p) => allowed(ctx, p)).map((p) => ({ ...p, moduleKey: m.key })));
+export function portalNavigation(ctx: AccessContext, opts: { onlyBuilt?: boolean } = {}): (PortalItem & { moduleKey: ModuleKey })[] {
+  return enabledModules(ctx)
+    .flatMap((m) => m.portal.filter((p) => allowed(ctx, p)).map((p) => ({ ...p, moduleKey: m.key })))
+    .filter((p) => !opts.onlyBuilt || isRouteAvailable(p.href));
 }
 
 const TAB_ORDER = ["/staff", "/staff/time", "/staff/requests", "/staff/pay", "/staff/me"];
 
 /** The staff app's bottom tabs, in order. */
-export function portalTabs(ctx: AccessContext) {
-  return portalNavigation(ctx)
+export function portalTabs(ctx: AccessContext, opts: { onlyBuilt?: boolean } = {}) {
+  return portalNavigation(ctx, opts)
     .filter((p) => p.tab)
     .sort((a, b) => TAB_ORDER.indexOf(a.href) - TAB_ORDER.indexOf(b.href));
 }
@@ -112,8 +114,14 @@ export function dashboardWidgets(ctx: AccessContext, section?: WidgetSection): (
     .filter((w) => !section || w.section === section);
 }
 
-export function notificationEvents(ctx: Pick<AccessContext, "modules">): (NotificationEvent & { moduleKey: ModuleKey })[] {
-  return enabledModules(ctx).flatMap((m) => m.notifications.map((n) => ({ ...n, moduleKey: m.key })));
+/** Notification types this person can choose from: switched-on tools, and only ones that apply to them. */
+export function notificationEvents(ctx: AccessContext): (NotificationEvent & { moduleKey: ModuleKey })[] {
+  return enabledModules(ctx)
+    .flatMap((m) => m.notifications.map((n) => ({ ...n, moduleKey: m.key })))
+    .filter((n) => {
+      const need = NOTIFICATION_AUDIENCE[n.key];
+      return !need || can(ctx, need.resource, need.action, need.scope);
+    });
 }
 
 /** Which tool a URL belongs to (used to block visits to switched-off tools). */

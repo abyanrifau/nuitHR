@@ -11,7 +11,7 @@
  * tables in a new migration using private.std_rls(...). See README →
  * "Adding a new tool".
  */
-import type { ModuleDefinition, ModuleKey, ToolStage } from "./types";
+import type { ModuleDefinition, ModuleKey, PermissionAction, PermissionScope, ToolStage } from "./types";
 
 const ALL: ("view" | "create" | "edit" | "approve" | "delete" | "export")[] = ["view", "create", "edit", "approve", "delete", "export"];
 const CRUD: ("view" | "create" | "edit" | "delete" | "export")[] = ["view", "create", "edit", "delete", "export"];
@@ -763,6 +763,25 @@ export function getModule(key: string): ModuleDefinition | undefined {
 export function isModuleKey(key: string): key is ModuleKey {
   return key in MODULE_MAP;
 }
+
+/**
+ * Notifications only offered to people who can act on them (for example
+ * "a request needs you" only for approvers). Events not listed here are
+ * about the person themselves, so everyone gets them.
+ */
+export const NOTIFICATION_AUDIENCE: Record<string, { resource: string; action: PermissionAction; scope?: PermissionScope }> = {
+  "employee.created": { resource: "employees", action: "view", scope: "all" },
+  "employee.probation_ending": { resource: "employees", action: "view", scope: "team" },
+  "approval.requested": { resource: "approvals", action: "approve" },
+  "letter.requested": { resource: "letters", action: "approve" },
+  "export.ready": { resource: "data_export", action: "create" },
+  "recruitment.application": { resource: "recruitment", action: "view" },
+  "recruitment.interview": { resource: "recruitment", action: "view" },
+  "attendance.correction_requested": { resource: "attendance", action: "approve" },
+  "leave.requested": { resource: "leave", action: "approve" },
+  "compliance.expiring": { resource: "compliance", action: "view", scope: "team" },
+  "payroll.finalized": { resource: "payroll", action: "view" },
+};
 
 /** Old tool keys that were merged into new ones. */
 export const LEGACY_KEYS: Record<string, ModuleKey> = { transport: "claims", expenses: "claims" };

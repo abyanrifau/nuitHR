@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { LogOut, UserRound } from "lucide-react";
+import { LogOut, Smartphone, UserRound } from "lucide-react";
 import { Logo } from "@/components/brand/logo";
 import { JumpTo, type JumpItem } from "@/components/app-shell/jump-to";
 import { MobileNav } from "@/components/app-shell/mobile-nav";
@@ -21,6 +21,8 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const [businesses, active] = await Promise.all([getMyBusinesses(), getActiveBusiness()]);
   if (!active) redirect("/onboarding");
   if (active.is_owner && !active.onboarding_completed_at) redirect("/onboarding");
+  // Staff use the phone app; the office view is for people who manage something.
+  if (active.role_key === "employee") redirect("/staff");
   const supabase = await createClient();
   const { count: unread } = await supabase
     .from("notifications")
@@ -58,6 +60,14 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
           <div className="flex items-center gap-2">
             <JumpTo items={jumpItems} />
             <NotificationBell unread={unread ?? 0} />
+            <Link
+              href="/staff"
+              aria-label="Staff app"
+              title="Staff app"
+              className="grid size-9 place-items-center rounded-lg text-muted-foreground hover:bg-accent-soft hover:text-foreground"
+            >
+              <Smartphone className="size-4" aria-hidden />
+            </Link>
             <ThemeToggle className="hidden sm:inline-flex" />
             <Link
               href="/app/account"

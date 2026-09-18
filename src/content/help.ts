@@ -13,7 +13,7 @@ export const HELP_ROLES: { key: HelpRole; title: string; summary: string }[] = [
   { key: "owner", title: "I own the business", summary: "Setting up, choosing tools, and deciding who can do what." },
   { key: "hr", title: "I run HR", summary: "Getting people in, keeping settings right, and tidy records." },
   { key: "manager", title: "I manage a team", summary: "Joining your company space and keeping an eye on your team." },
-  { key: "staff", title: "I'm a staff member", summary: "Signing in, joining from an invitation and getting back in if you're locked out." },
+  { key: "staff", title: "I'm a staff member", summary: "The phone app, asking for letters, joining from an invitation and getting back in." },
 ];
 
 export interface HelpGuide {
@@ -317,6 +317,40 @@ export const HELP_GUIDES: HelpGuide[] = [
       "Access ends by itself. Select End now to close it early.",
     ],
     wrong: ["You can't see the support access section: only the owner or an admin can let support in."],
+  },
+  {
+    slug: "staff-app",
+    title: "Use the staff app on your phone",
+    roles: ["staff", "manager", "owner", "hr"],
+    intro: "The staff app is where staff see news, ask for letters, find their files and keep their contact details up to date. It works in the phone's browser, and you can add it to your home screen like any other app.",
+    steps: [
+      "Open the invitation email on your phone and set your password, or sign in at the usual address.",
+      "Staff go straight to the staff app. Managers and HR can switch between the staff app and the office view with the button at the top.",
+      "On Android, tap Install when the app offers it. On iPhone, open it in Safari, tap Share, then Add to Home Screen.",
+      "Home shows company news and quick links. Requests shows what you've asked for, and anything waiting for your decision.",
+      "Me is where you update your phone number and address, add emergency contacts, choose notifications and turn on two-step sign-in.",
+    ],
+    wrong: [
+      '"Your login isn\'t linked to a staff profile": ask HR to link your login to your profile in Workspace → People & access.',
+      "No Install button on iPhone: Apple only allows adding apps from Safari, using Share → Add to Home Screen.",
+      "It says you're offline: check your data or Wi-Fi and tap Try again. Nothing you entered is lost until you send it.",
+    ],
+  },
+  {
+    slug: "ask-for-a-letter",
+    title: "Ask for a letter from your phone",
+    roles: ["staff"],
+    intro: "You can ask HR for letters such as an employment certificate, a salary certificate or a no objection letter.",
+    steps: [
+      "In the staff app, open Requests and choose A letter.",
+      "Pick the letter, say what it's for, and who it should be addressed to if the bank or office asked for that.",
+      "Tap Send request. Your manager or HR approves it, and HR prepares it on company letterhead.",
+      "You get a notification when it's ready. Tap Download on the letter.",
+    ],
+    wrong: [
+      "The letter you need isn't in the list: HR decides which letters can be asked for. Ask them directly.",
+      "Your request was declined: the note from the person who declined it is shown under the request.",
+    ],
   },
 ];
 

@@ -3,7 +3,7 @@ import { CORE_MODULE_KEYS, FOUNDATION_TOOLS, MODULES, TOOL_STAGES, allResources,
 import { dependentsOf, disableModule, enableModule, normalizeSelection, previewDisable, recommendationsFor } from "@/modules/selection";
 import { estimateMonthlyPrice } from "@/modules/pricing";
 import { DEFAULT_ROLES } from "@/modules/roles";
-import { adminNavigation, moduleForPath, portalNavigation, portalTabs, type AccessContext } from "@/modules/access";
+import { adminNavigation, moduleForPath, notificationEvents, portalNavigation, portalTabs, type AccessContext } from "@/modules/access";
 import { isComplete, recommendTools, selectionFromAnswers, SETUP_QUESTIONS } from "@/modules/setup-questions";
 import { appConfig } from "@/config/app.config";
 
@@ -211,6 +211,17 @@ describe("navigation adapts to switched-on tools", () => {
       "/app/workspace/data",
       "/app/workspace/support",
     ]);
+  });
+
+  it("only offers notifications that apply to the person", () => {
+    const staff: AccessContext = { isOwner: false, modules: normalizeSelection(["leave"]), permissions: DEFAULT_ROLES.find((r) => r.key === "employee")!.permissions };
+    const keys = notificationEvents(staff).map((e) => e.key);
+    expect(keys).toContain("approval.decided");
+    expect(keys).toContain("leave.decided");
+    expect(keys).not.toContain("approval.requested");
+    expect(keys).not.toContain("employee.created");
+    expect(keys).not.toContain("leave.requested");
+    expect(notificationEvents(owner(["leave"])).map((e) => e.key)).toContain("approval.requested");
   });
 
   it("hides items the person isn't allowed to see", () => {

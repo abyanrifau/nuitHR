@@ -24,8 +24,8 @@ People, time, pay and paperwork for multiple companies (each in its own sealed "
 | 1 | Project setup, database for every module, security rules, module registry, sign-in | ✅ Done |
 | 2 | Sign-up, question-based setup, Workspace → Tools | ✅ Done (restructured) |
 | 3 | Foundation: people, org chart, access & roles, requests, letters & files, company settings, notifications, news, activity log, data export, two-step sign-in, support | ✅ Done |
-| 4 | Staff app (installable phone app at `/staff`) | Next |
-| 5 | Attendance & Leave | |
+| 4 | Staff app (installable phone app at `/staff`): news, requests, letters, files, directory, my details | ✅ Done |
+| 5 | Time & shifts, Time off | Next |
 | 6 | Payroll, Transport Allowance, Expense Claims | |
 | 7 | Recruitment, Onboarding, Compliance | |
 | 8 | Learning & People Development | |
@@ -141,6 +141,14 @@ Open **http://localhost:3000/setup** in your browser. Every line should have a g
 | Workspace → Your data (download everything as a ZIP) | `/app/workspace/data` | owner |
 | Workspace → Help & support (message us, let support in for a limited time) | `/app/workspace/support` | signed in |
 | A tool's settings | `/app/workspace/tools/leave` (also `employees`, `attendance`, `payroll`, `claims`, `performance`) | signed in with rights to that tool |
+| Staff app: Home (news, quick links) | `/staff` | signed in (staff land here automatically) |
+| Staff app: Requests (yours, and ones waiting for your decision) | `/staff/requests` | signed in |
+| Staff app: Ask for a letter | `/staff/letters` | login linked to a staff profile |
+| Staff app: My files | `/staff/files` | login linked to a staff profile |
+| Staff app: Directory | `/staff/directory` | signed in |
+| Staff app: Me (contact details, emergency contacts, notifications, two-step sign-in) | `/staff/me` | signed in |
+| Staff app: Notifications | `/staff/notifications` | signed in |
+| No connection page (shown by the phone app when offline) | `/offline` | nothing |
 | Accept an invitation | `/invite/…` | the invitation link |
 | Setup check | `/setup` | nothing |
 | Privacy / Terms | `/privacy`, `/terms` | nothing |

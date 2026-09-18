@@ -28,6 +28,13 @@ export const AVAILABLE_ROUTES = new Set<string>([
   "/app/workspace/tools/claims",
   "/app/workspace/tools/performance",
   "/help",
+  "/staff",
+  "/staff/requests",
+  "/staff/letters",
+  "/staff/files",
+  "/staff/directory",
+  "/staff/me",
+  "/staff/notifications",
 ]);
 
 export function isRouteAvailable(href: string): boolean {
