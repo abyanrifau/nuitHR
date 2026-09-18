@@ -42,7 +42,7 @@ describe("turning modules on and off", () => {
     await asUser(db, f.users.ownerA, (tx) =>
       tx.query(`insert into public.leave_types (business_id, name, code, entitlement_days) values ($1, 'Annual', 'AL', 30)`, [f.bizA]),
     );
-    const withoutLeave = normalizeSelection(["attendance", "payroll", "transport"]);
+    const withoutLeave = normalizeSelection(["attendance", "payroll", "claims"]);
     await setModules(f.users.ownerA, f.bizA, withoutLeave);
     const state = await asUser(db, f.users.ownerA, (tx) =>
       one<{ enabled: boolean }>(tx, `select enabled from public.business_modules where business_id = $1 and module_key = 'leave'`, [f.bizA]),
@@ -51,28 +51,48 @@ describe("turning modules on and off", () => {
     expect(await count(f.users.ownerA, `select 1 from public.leave_types where business_id = $1`, [f.bizA])).toBe(1);
 
     await setModules(f.users.ownerA, f.bizA, normalizeSelection([...withoutLeave, "leave"]));
-    const access = await asUser(db, f.users.ownerA, (tx) => one<{ a: { business_id: string; modules: string[] }[] }>(tx, `select public.get_my_access() as a`));
+    const access = await asUser(db, f.users.ownerA, (tx) =>
+      one<{ a: { business_id: string; modules: string[] }[] }>(tx, `select public.get_my_access() as a`),
+    );
     expect(access.a.find((b) => b.business_id === f.bizA)?.modules).toContain("leave");
     expect(await count(f.users.ownerA, `select 1 from public.leave_types where business_id = $1`, [f.bizA])).toBe(1);
   });
 
   it("adds starter data the first time some modules are switched on", async () => {
-    const r = await setModules(f.users.ownerA, f.bizA, normalizeSelection(["attendance", "leave", "payroll", "transport", "compliance", "expenses", "onboarding"]));
-    expect(r.rows[0].r.sort()).toEqual(["compliance", "expenses", "onboarding"]);
+    const r = await setModules(f.users.ownerA, f.bizA, normalizeSelection(["attendance", "leave", "payroll", "claims", "compliance", "onboarding"]));
+    expect(r.rows[0].r.sort()).toEqual(["compliance", "onboarding"]);
     expect(await count(f.users.ownerA, `select 1 from public.compliance_types where business_id = $1`, [f.bizA])).toBe(6);
-    expect(await count(f.users.ownerA, `select 1 from public.expense_categories where business_id = $1`, [f.bizA])).toBe(6);
+    expect(await count(f.users.ownerA, `select 1 from public.claim_types where business_id = $1 and key = 'transport'`, [f.bizA])).toBe(1);
     expect(await count(f.users.ownerA, `select 1 from public.checklist_templates where business_id = $1`, [f.bizA])).toBe(2);
     // switching off and on again doesn't duplicate anything
-    await setModules(f.users.ownerA, f.bizA, normalizeSelection(["attendance", "leave", "payroll", "transport"]));
-    await setModules(f.users.ownerA, f.bizA, normalizeSelection(["attendance", "leave", "payroll", "transport", "compliance", "expenses", "onboarding"]));
+    await setModules(f.users.ownerA, f.bizA, normalizeSelection(["attendance", "leave", "payroll", "claims"]));
+    await setModules(f.users.ownerA, f.bizA, normalizeSelection(["attendance", "leave", "payroll", "claims", "compliance", "onboarding"]));
     expect(await count(f.users.ownerA, `select 1 from public.compliance_types where business_id = $1`, [f.bizA])).toBe(6);
   });
 
   it("refuses to switch off core modules, break dependencies, or accept unknown modules", async () => {
-    const base = normalizeSelection(["payroll", "transport"]);
-    await expect(setModules(f.users.ownerA, f.bizA, base.filter((k) => k !== "approvals"))).rejects.toThrow(/Core modules/);
-    await expect(setModules(f.users.ownerA, f.bizA, base.filter((k) => k !== "payroll"))).rejects.toThrow(/transport needs payroll/);
-    await expect(setModules(f.users.ownerA, f.bizA, [...base, "spaceship"])).rejects.toThrow(/Unknown module/);
+    const base = normalizeSelection(["payroll", "claims"]);
+    await expect(
+      setModules(
+        f.users.ownerA,
+        f.bizA,
+        base.filter((k) => k !== "approvals"),
+      ),
+    ).rejects.toThrow(/foundation tools are always included/);
+    // Claims no longer needs Payroll.
+    await setModules(
+      f.users.ownerA,
+      f.bizA,
+      base.filter((k) => k !== "payroll"),
+    );
+    // An older copy of the app sending the old keys still works: they become Claims.
+    await setModules(f.users.ownerA, f.bizA, [...base.filter((k) => k !== "claims"), "transport", "expenses"]);
+    const on = await asUser(db, f.users.ownerA, (tx) =>
+      tx.query<{ module_key: string }>(`select module_key from public.business_modules where business_id = $1 and enabled`, [f.bizA]),
+    );
+    expect(on.rows.map((r) => r.module_key)).toContain("claims");
+    expect(on.rows.map((r) => r.module_key)).not.toContain("transport");
+    await expect(setModules(f.users.ownerA, f.bizA, [...base, "spaceship"])).rejects.toThrow(/Unknown tool/);
   });
 
   it("only lets people with module rights change modules", async () => {
@@ -87,7 +107,7 @@ describe("quick setup (wizard step 4)", () => {
     asUser(db, who, (tx) => tx.query(`select public.apply_module_setup($1, $2, $3::jsonb)`, [biz, module, JSON.stringify(config)]));
 
   it("applies every module's default setup, and running it twice creates no duplicates", async () => {
-    await setModules(f.users.ownerA, f.bizA, normalizeSelection(["attendance", "leave", "payroll", "transport", "performance"]));
+    await setModules(f.users.ownerA, f.bizA, normalizeSelection(["attendance", "leave", "payroll", "claims", "performance"]));
     for (const mod of SETUP_ORDER as SetupModule[]) {
       const config = defaultSetup(mod, { industry: "guesthouse", country: "MV", today: new Date("2026-09-18") });
       await apply(f.users.ownerA, mod, config);
@@ -95,31 +115,54 @@ describe("quick setup (wizard step 4)", () => {
     }
     const n = (sql: string) => count(f.users.ownerA, sql, [f.bizA]);
     expect(await n(`select 1 from public.departments where business_id = $1 and name = 'Excursions'`)).toBe(1);
-    expect(await n(`select 1 from public.positions p join public.departments d on d.id = p.department_id where p.business_id = $1 and d.name = 'Excursions'`)).toBe(2);
+    expect(
+      await n(
+        `select 1 from public.positions p join public.departments d on d.id = p.department_id where p.business_id = $1 and d.name = 'Excursions'`,
+      ),
+    ).toBe(2);
     expect(await n(`select 1 from public.leave_types where business_id = $1`)).toBe(6);
     expect(await n(`select 1 from public.public_holidays where business_id = $1 and holiday_date = '2026-07-26'`)).toBe(1);
     expect(await n(`select 1 from public.shifts where business_id = $1`)).toBe(3);
     expect(await n(`select 1 from public.shifts where business_id = $1 and name = 'Night' and crosses_midnight`)).toBe(1);
     expect(await n(`select 1 from public.attendance_policies where business_id = $1 and is_default`)).toBe(1);
-    expect(await n(`select 1 from public.pay_schedules where business_id = $1 and claims_cutoff_day = 20`)).toBe(1);
+    expect(await n(`select 1 from public.pay_schedules where business_id = $1 and is_default`)).toBe(1);
     expect(await n(`select 1 from public.pension_schemes where business_id = $1 and is_active and employee_rate = 7`)).toBe(1);
-    expect(await n(`select 1 from public.tax_brackets tb join public.tax_tables t on t.id = tb.tax_table_id where tb.business_id = $1 and t.is_active`)).toBe(5);
+    expect(
+      await n(`select 1 from public.tax_brackets tb join public.tax_tables t on t.id = tb.tax_table_id where tb.business_id = $1 and t.is_active`),
+    ).toBe(5);
     expect(await n(`select 1 from public.pay_components where business_id = $1`)).toBe(6);
     expect(await n(`select 1 from public.account_codes where business_id = $1 and mapping_key = 'net_pay_payable'`)).toBe(1);
     expect(await n(`select 1 from public.review_cycles where business_id = $1`)).toBe(1);
     expect(await n(`select 1 from public.review_questions where business_id = $1`)).toBe(5);
-    expect(await n(`select 1 from public.business_modules where business_id = $1 and setup_completed_at is not null`)).toBe(6);
+    expect(await n(`select 1 from public.business_modules where business_id = $1 and setup_completed_at is not null`)).toBe(5);
   });
 
-  it("uses the edited values, not the defaults", async () => {
-    await apply(f.users.ownerA, "transport", { claims_cutoff_day: 25 });
-    expect(await count(f.users.ownerA, `select 1 from public.pay_schedules where business_id = $1 and claims_cutoff_day = 25`, [f.bizA])).toBe(1);
+  it("sets the transport cut-off through the old key too (it now lives on the Transport claim type)", async () => {
+    await apply(f.users.ownerA, "transport" as SetupModule, { claims_cutoff_day: 25 });
+    expect(
+      await count(f.users.ownerA, `select 1 from public.claim_types where business_id = $1 and key = 'transport' and cutoff_day = 25`, [f.bizA]),
+    ).toBe(1);
   });
 
-  it("needs the module switched on, and payroll set up before transport", async () => {
-    await expect(apply(f.users.ownerB, "payroll", defaultSetup("payroll", { industry: "restaurant", country: "MV" }), f.bizB)).rejects.toThrow(/Turn the module on/);
-    await setModules(f.users.ownerB, f.bizB, normalizeSelection(["attendance", "leave", "transport"]));
-    await expect(apply(f.users.ownerB, "transport", { claims_cutoff_day: 20 }, f.bizB)).rejects.toThrow(/payroll pay cycle first/);
+  it("needs the tool switched on first", async () => {
+    await expect(apply(f.users.ownerB, "payroll", defaultSetup("payroll", { industry: "restaurant", country: "MV" }), f.bizB)).rejects.toThrow(
+      /Switch the tool on first/,
+    );
+  });
+
+  it("can apply starting settings without ticking the checklist", async () => {
+    await setModules(f.users.ownerB, f.bizB, normalizeSelection(["attendance", "leave"]));
+    await asUser(db, f.users.ownerB, (tx) =>
+      tx.query(`select public.apply_module_setup($1, 'leave', $2::jsonb, false)`, [
+        f.bizB,
+        JSON.stringify(defaultSetup("leave", { industry: "restaurant", country: "MV" })),
+      ]),
+    );
+    const c = await asUser(db, f.users.ownerB, (tx) =>
+      one<{ c: Record<string, boolean> }>(tx, `select public.get_setup_checklist($1) as c`, [f.bizB]),
+    );
+    expect(c.c["leave.types"]).toBe(false);
+    expect(await count(f.users.ownerB, `select 1 from public.leave_types where business_id = $1`, [f.bizB])).toBe(6);
   });
 
   it("checks permissions per module", async () => {
@@ -142,10 +185,15 @@ describe("business profile & branches", () => {
     );
 
   it("saves the profile and syncs branches (unused ones are removed, used ones are kept but deactivated)", async () => {
-    const before = await asUser(db, f.users.ownerA, (tx) => tx.query<{ id: string; name: string }>(`select id, name from public.branches where business_id = $1`, [f.bizA]));
+    const before = await asUser(db, f.users.ownerA, (tx) =>
+      tx.query<{ id: string; name: string }>(`select id, name from public.branches where business_id = $1`, [f.bizA]),
+    );
     const male = before.rows.find((b) => b.name === "Male Office")!;
     await save(f.users.ownerA, [{ id: male.id, name: "Malé Office" }, { name: "Resort Island", atoll_island: "Baa Atoll" }, { name: "Spare" }]);
-    await save(f.users.ownerA, [{ id: male.id, name: "Malé Office" }, { name: "Resort Island", atoll_island: "Baa Atoll" }]);
+    await save(f.users.ownerA, [
+      { id: male.id, name: "Malé Office" },
+      { name: "Resort Island", atoll_island: "Baa Atoll" },
+    ]);
     const rows = await asUser(db, f.users.ownerA, (tx) =>
       tx.query<{ name: string; is_active: boolean }>(`select name, is_active from public.branches where business_id = $1 order by name`, [f.bizA]),
     );
@@ -155,7 +203,9 @@ describe("business profile & branches", () => {
     ]);
     // Malé Office is used by employees; removing it from the list deactivates rather than deletes.
     await save(f.users.ownerA, [{ name: "Resort Island" }]);
-    const male2 = await asUser(db, f.users.ownerA, (tx) => one<{ is_active: boolean }>(tx, `select is_active from public.branches where id = $1`, [male.id]));
+    const male2 = await asUser(db, f.users.ownerA, (tx) =>
+      one<{ is_active: boolean }>(tx, `select is_active from public.branches where id = $1`, [male.id]),
+    );
     expect(male2.is_active).toBe(false);
     await save(f.users.ownerA, [{ id: male.id, name: "Malé Office" }, { name: "Resort Island" }]);
   });
@@ -169,12 +219,29 @@ describe("business profile & branches", () => {
 
 describe("employee import", () => {
   const importRows = (who: string, rows: unknown[]) =>
-    asUser(db, who, (tx) => one<{ r: { employee_code: string; id: string }[] }>(tx, `select public.import_employees($1, $2::jsonb) as r`, [f.bizA, JSON.stringify(rows)]));
+    asUser(db, who, (tx) =>
+      one<{ r: { employee_code: string; id: string }[] }>(tx, `select public.import_employees($1, $2::jsonb) as r`, [f.bizA, JSON.stringify(rows)]),
+    );
 
   it("creates employees, missing departments/positions, IDs and reporting lines in one go", async () => {
     const r = await importRows(f.users.hrA, [
-      { first_name: "Ahmed", last_name: "Naseem", department: "Excursions", position: "Dive Instructor", branch: "Resort Island", manager_code: "MGR9" },
-      { employee_code: "MGR9", first_name: "Mariyam", department: "Spa", position: "Spa Manager", join_date: "2025-01-05", nationality: "LK", is_expatriate: true },
+      {
+        first_name: "Ahmed",
+        last_name: "Naseem",
+        department: "Excursions",
+        position: "Dive Instructor",
+        branch: "Resort Island",
+        manager_code: "MGR9",
+      },
+      {
+        employee_code: "MGR9",
+        first_name: "Mariyam",
+        department: "Spa",
+        position: "Spa Manager",
+        join_date: "2025-01-05",
+        nationality: "LK",
+        is_expatriate: true,
+      },
     ]);
     expect(r.r).toHaveLength(2);
     expect(r.r[0].employee_code).toMatch(/^E\d{4}$/);
@@ -193,7 +260,9 @@ describe("employee import", () => {
 
   it("saves nothing if any row fails", async () => {
     const before = await count(f.users.hrA, `select 1 from public.employees where business_id = $1`, [f.bizA]);
-    await expect(importRows(f.users.hrA, [{ first_name: "Ok" }, { first_name: "Bad", branch: "Nowhere" }])).rejects.toThrow(/Row 2: branch "Nowhere"/);
+    await expect(importRows(f.users.hrA, [{ first_name: "Ok" }, { first_name: "Bad", branch: "Nowhere" }])).rejects.toThrow(
+      /Row 2: branch "Nowhere"/,
+    );
     await expect(importRows(f.users.hrA, [{ first_name: "Dup", employee_code: "MGR9" }])).rejects.toThrow(/already used/);
     await expect(importRows(f.users.hrA, [{ first_name: "Lost", manager_code: "NOPE" }])).rejects.toThrow(/manager ID "NOPE"/);
     expect(await count(f.users.hrA, `select 1 from public.employees where business_id = $1`, [f.bizA])).toBe(before);
@@ -218,7 +287,9 @@ describe("invitations", () => {
 
   it("lets a new person join with the right role through their link", async () => {
     await invite(f.users.hrA, "newhire@test.mv", "employee", "tok-good");
-    const preview = await asUser(db, null, (tx) => one<{ p: { business_name: string; status: string } }>(tx, `select public.get_invitation_preview('tok-good') as p`));
+    const preview = await asUser(db, null, (tx) =>
+      one<{ p: { business_name: string; status: string } }>(tx, `select public.get_invitation_preview('tok-good') as p`),
+    );
     expect(preview.p).toMatchObject({ business_name: "Lagoon Guesthouse", status: "valid" });
 
     const newbie = await createUser(db, "NewHire@test.mv");
@@ -232,7 +303,9 @@ describe("invitations", () => {
 
   it("rejects the wrong email, used, expired or unknown links", async () => {
     await invite(f.users.hrA, "someone@test.mv", "employee", "tok-email");
-    await expect(asUser(db, f.users.outsider, (tx) => tx.query(`select public.accept_invitation('tok-email')`))).rejects.toThrow(/sent to someone@test.mv/);
+    await expect(asUser(db, f.users.outsider, (tx) => tx.query(`select public.accept_invitation('tok-email')`))).rejects.toThrow(
+      /sent to someone@test.mv/,
+    );
     await expect(asUser(db, f.users.outsider, (tx) => tx.query(`select public.accept_invitation('tok-good')`))).rejects.toThrow(/already been used/);
     await invite(f.users.hrA, "outsider@test.mv", "employee", "tok-old", "now() - interval '1 day'");
     await expect(asUser(db, f.users.outsider, (tx) => tx.query(`select public.accept_invitation('tok-old')`))).rejects.toThrow(/expired/);
@@ -254,12 +327,16 @@ describe("invitations", () => {
 
 describe("getting-started checklist", () => {
   it("reports what's done, and reveals nothing to outsiders", async () => {
-    const c = await asUser(db, f.users.ownerA, (tx) => one<{ c: Record<string, boolean> }>(tx, `select public.get_setup_checklist($1) as c`, [f.bizA]));
+    const c = await asUser(db, f.users.ownerA, (tx) =>
+      one<{ c: Record<string, boolean> }>(tx, `select public.get_setup_checklist($1) as c`, [f.bizA]),
+    );
     expect(c.c["org.departments"]).toBe(true);
     expect(c.c["employees.first"]).toBe(true);
     expect(c.c["leave.types"]).toBe(true);
     expect(c.c["learning.course"]).toBe(false);
-    const outsider = await asUser(db, f.users.ownerB, (tx) => one<{ c: Record<string, boolean> }>(tx, `select public.get_setup_checklist($1) as c`, [f.bizA]));
+    const outsider = await asUser(db, f.users.ownerB, (tx) =>
+      one<{ c: Record<string, boolean> }>(tx, `select public.get_setup_checklist($1) as c`, [f.bizA]),
+    );
     expect(outsider.c).toEqual({});
   });
 });

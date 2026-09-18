@@ -59,7 +59,7 @@ export function SiteHeader() {
               log in
             </Link>
             <Link href="/signup" className={buttonClasses({ size: "sm" })}>
-              start free trial
+              start free
             </Link>
           </div>
           <button
@@ -105,7 +105,7 @@ export function SiteHeader() {
             ))}
           </nav>
           <Link href="/signup" onClick={() => setOpen(false)} className={buttonClasses({ size: "lg", className: "mt-10 w-full" })}>
-            start free trial
+            start free
           </Link>
         </div>
       )}

@@ -294,6 +294,19 @@ legend {
   animation: rise 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) both;
 }
 
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+@utility animate-float {
+  animation: float 7s ease-in-out infinite;
+}
+
 @keyframes blob-drift-a {
   0%,
   100% {

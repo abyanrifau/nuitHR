@@ -1,22 +1,22 @@
 "use server";
 
-import { randomBytes, createHash } from "node:crypto";
-import { cookies, headers } from "next/headers";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
-import { requireUser, ACTIVE_BUSINESS_COOKIE } from "@/lib/auth/session";
-import { siteUrl } from "@/lib/env";
-import { emailButton, emailLayout, escapeHtml, sendEmail } from "@/lib/email";
+import { requireUser, ACTIVE_BUSINESS_COOKIE, getActiveBusiness } from "@/lib/auth/session";
 import { appConfig } from "@/config/app.config";
+import { createInvitation } from "@/lib/invitations";
 import { defaultRolesPayload } from "@/modules/roles";
 import { CORE_MODULE_KEYS } from "@/modules/registry";
 import { normalizeSelection } from "@/modules/selection";
 import { EMPLOYEE_COUNT_RANGES } from "@/modules/pricing";
-import { isSetupModule, SETUP_SCHEMAS } from "@/modules/setup-defaults";
+import { defaultSetup, isSetupModule, SETUP_SCHEMAS } from "@/modules/setup-defaults";
+import { isComplete, SETUP_QUESTIONS } from "@/modules/setup-questions";
+import type { Industry } from "@/modules/selection";
 import { previewImport, type ImportRow } from "@/modules/employee-import";
-import { getOnboardingState, saveDraft, setupModulesFor, type DraftData } from "./state";
+import { getOnboardingState, saveDraft } from "./state";
 
 export interface ActionState {
   error?: string;
@@ -40,10 +40,10 @@ async function setActiveBusiness(businessId: string) {
 }
 
 // ---------------------------------------------------------------------
-// Step 2: business profile
+// Screen 2: about your company
 // ---------------------------------------------------------------------
 const businessSchema = z.object({
-  name: z.string().trim().min(2, "Enter your business name.").max(120),
+  name: z.string().trim().min(2, "Enter your company name.").max(120),
   industry: z.enum(["resort", "guesthouse", "hotel", "restaurant", "retail", "office", "construction", "manufacturing", "other"], {
     message: "Choose your industry.",
   }),
@@ -62,8 +62,8 @@ const businessSchema = z.object({
 const branchesSchema = z
   .array(z.object({ id: z.string().optional(), name: z.string().trim().max(80), atoll_island: z.string().trim().max(80).optional() }))
   .transform((b) => b.filter((x) => x.name))
-  .refine((b) => b.length > 0, "Add at least one branch or location.")
-  .refine((b) => new Set(b.map((x) => x.name.toLowerCase())).size === b.length, "Each branch needs a different name.");
+  .refine((b) => b.length > 0, "Add at least one location.")
+  .refine((b) => new Set(b.map((x) => x.name.toLowerCase())).size === b.length, "Each location needs a different name.");
 
 const LOGO_TYPES: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" };
 
@@ -118,73 +118,126 @@ export async function saveBusinessStep(_: ActionState, fd: FormData): Promise<Ac
   if (error) return { error: friendly(error.message) };
 
   await saveDraft(user.id, { step: Math.max(3, state.currentStep) });
-  redirect("/onboarding/modules");
+  redirect("/onboarding/questions");
 }
 
 // ---------------------------------------------------------------------
-// Step 3: modules (also used by Settings → Modules)
+// Screen 3: "Tell us how you work"
 // ---------------------------------------------------------------------
+const answersSchema = z.record(z.string(), z.string().max(40));
+
+export async function saveAnswers(answers: Record<string, string>): Promise<ActionState> {
+  const user = await requireUser("/onboarding");
+  const state = await getOnboardingState();
+  if (!state.businessId) redirect("/onboarding/company");
+  const parsed = answersSchema.safeParse(answers);
+  if (!parsed.success) return { error: "Please answer each question." };
+  const known = Object.fromEntries(SETUP_QUESTIONS.map((q) => [q.key, parsed.data[q.key]]).filter(([, v]) => v)) as Record<string, string>;
+  if (!isComplete(known)) return { error: "Please answer each question." };
+  await saveDraft(user.id, { step: Math.max(4, state.currentStep), data: { answers: known } });
+  redirect("/onboarding/tools");
+}
+
+// ---------------------------------------------------------------------
+// Tools (setup screen 4, and Workspace → Tools)
+// ---------------------------------------------------------------------
+/** Sensible starting settings for tools that were just switched on (only if they have none yet). */
+async function applyStarterSettings(businessId: string, turnedOn: string[]) {
+  const supabase = await createClient();
+  const { data: b } = await supabase.from("businesses").select("industry, country").eq("id", businessId).maybeSingle();
+  if (!b) return;
+  const ctx = { industry: b.industry as Industry, country: b.country };
+  for (const key of ["employees", "leave", "attendance", "payroll"] as const) {
+    if (key !== "employees" && !turnedOn.includes(key)) continue;
+    if (key === "employees") {
+      const { count } = await supabase.from("departments").select("id", { count: "exact", head: true }).eq("business_id", businessId);
+      if (count) continue;
+    }
+    // Not marked "done": the setup checklist still asks the owner to check these.
+    await supabase.rpc("apply_module_setup", { p_business: businessId, p_module: key, p_config: defaultSetup(key, ctx), p_mark_done: false });
+  }
+}
+
 export async function saveModules(businessId: string, selected: string[]): Promise<ActionState & { enabled?: string[] }> {
   await requireUser();
   const modules = normalizeSelection(selected);
   const supabase = await createClient();
-  const { error } = await supabase.rpc("set_business_modules", { p_business: businessId, p_enabled: modules });
+  const { data: newlyOn, error } = await supabase.rpc("set_business_modules", { p_business: businessId, p_enabled: modules });
   if (error) return { error: friendly(error.message) };
+  await applyStarterSettings(businessId, (newlyOn as string[] | null) ?? []);
   revalidatePath("/app", "layout");
-  return { message: "Modules saved.", enabled: modules };
+  return { message: "Tools saved.", enabled: modules };
 }
 
-export async function saveModulesStep(selected: string[]): Promise<ActionState> {
+export async function saveToolsStep(selected: string[]): Promise<ActionState> {
   const user = await requireUser("/onboarding");
   const state = await getOnboardingState();
-  if (!state.businessId) redirect("/onboarding/business");
+  if (!state.businessId) redirect("/onboarding/company");
   const result = await saveModules(state.businessId, selected);
   if (result.error) return result;
-  await saveDraft(user.id, { step: Math.max(4, state.currentStep) });
-  const first = setupModulesFor(result.enabled as never)[0];
-  redirect(first ? `/onboarding/setup/${first}` : "/onboarding/team");
+  await saveDraft(user.id, { step: Math.max(5, state.currentStep) });
+  redirect("/onboarding/invite");
 }
 
-// ---------------------------------------------------------------------
-// Step 4: quick setup per module
-// ---------------------------------------------------------------------
-async function nextAfterSetup(module: string): Promise<string> {
-  const state = await getOnboardingState();
-  const list = setupModulesFor(state.modules);
-  const idx = list.indexOf(module as never);
-  return list[idx + 1] ? `/onboarding/setup/${list[idx + 1]}` : "/onboarding/team";
-}
-
-export async function saveSetupStep(module: string, config: unknown): Promise<ActionState> {
-  const user = await requireUser("/onboarding");
-  if (!isSetupModule(module)) return { error: "Unknown setup step." };
-  const state = await getOnboardingState();
-  if (!state.businessId) redirect("/onboarding/business");
-
+/** Workspace → Tools → (tool): save a tool's settings. */
+export async function saveToolSettings(module: string, config: unknown): Promise<ActionState> {
+  await requireUser();
+  if (!isSetupModule(module)) return { error: "This tool has no settings here." };
+  const businessId = (await getActiveBusiness())?.business_id;
+  if (!businessId) return { error: "No company selected." };
   const parsed = SETUP_SCHEMAS[module].safeParse(config);
   if (!parsed.success) {
     const first = parsed.error.issues[0];
     return { error: `Please check your entries: ${first.message}${first.path.length ? ` (${first.path.join(" › ")})` : ""}` };
   }
   const supabase = await createClient();
-  const { error } = await supabase.rpc("apply_module_setup", { p_business: state.businessId, p_module: module, p_config: parsed.data });
+  const { error } = await supabase.rpc("apply_module_setup", { p_business: businessId, p_module: module, p_config: parsed.data });
   if (error) return { error: friendly(error.message) };
-
-  const skipped = (state.draft.skipped ?? []).filter((s) => s !== module);
-  await saveDraft(user.id, { step: Math.max(4, state.currentStep), data: { skipped } });
-  redirect(await nextAfterSetup(module));
+  revalidatePath("/app", "layout");
+  return { message: "Saved." };
 }
 
-export async function skipSetupStep(module: string): Promise<void> {
-  const user = await requireUser("/onboarding");
-  const state = await getOnboardingState();
-  const skipped = [...new Set([...(state.draft.skipped ?? []), module])];
-  await saveDraft(user.id, { step: Math.max(4, state.currentStep), data: { skipped } as DraftData });
-  redirect(await nextAfterSetup(module));
+const claimTypeSchema = z.object({
+  id: z.string().uuid().optional(),
+  name: z.string().trim().min(1, "Give each claim type a name.").max(60),
+  key: z.enum(["transport", "meals", "travel", "supplies", "custom"]),
+  cutoff_day: z.number().int().min(1).max(28).nullable(),
+  max_amount: z.number().positive().nullable(),
+  requires_receipt: z.boolean(),
+  payout_method: z.enum(["payroll", "separate"]),
+  is_active: z.boolean(),
+});
+
+/** Workspace → Tools → Claims: save claim types and their rules. */
+export async function saveClaimTypes(types: unknown[]): Promise<ActionState> {
+  await requireUser();
+  const businessId = (await getActiveBusiness())?.business_id;
+  if (!businessId) return { error: "No company selected." };
+  const parsed = z.array(claimTypeSchema).min(1, "Keep at least one claim type.").max(40).safeParse(types);
+  if (!parsed.success) return { error: parsed.error.issues[0].message };
+  const names = parsed.data.map((t) => t.name.toLowerCase());
+  if (new Set(names).size !== names.length) return { error: "Each claim type needs a different name." };
+
+  const supabase = await createClient();
+  for (const [i, t] of parsed.data.entries()) {
+    const { id, ...fields } = t;
+    const row = { ...fields, sort: i + 1 };
+    const { error } = id
+      ? await supabase.from("claim_types").update(row).eq("id", id).eq("business_id", businessId)
+      : await supabase.from("claim_types").insert({ ...row, business_id: businessId });
+    if (error) return { error: friendly(error.message) };
+  }
+  await supabase
+    .from("business_modules")
+    .update({ setup_completed_at: new Date().toISOString() })
+    .eq("business_id", businessId)
+    .eq("module_key", "claims");
+  revalidatePath("/app", "layout");
+  return { message: "Claim types saved." };
 }
 
 // ---------------------------------------------------------------------
-// Step 5: team (invite / add manually / import)
+// Screen 5: invite people (email invites, add manually, or import)
 // ---------------------------------------------------------------------
 export interface InviteOutcome {
   name: string;
@@ -192,53 +245,6 @@ export interface InviteOutcome {
   status: "added" | "invited" | "invite_link" | "error";
   detail?: string;
   link?: string;
-}
-
-async function origin(): Promise<string> {
-  return (await headers()).get("origin") ?? siteUrl();
-}
-
-/** Creates an invitation and emails it. Returns the link so it can also be shared by hand. */
-async function createInvitation(opts: {
-  businessId: string;
-  businessName: string;
-  email: string;
-  roleId: string;
-  roleName: string;
-  employeeId?: string | null;
-  inviterName: string;
-}): Promise<{ link?: string; emailed: boolean; error?: string }> {
-  const supabase = await createClient();
-  const token = randomBytes(32).toString("base64url");
-  const tokenHash = createHash("sha256").update(token).digest("hex");
-  // Cancel older pending invitations for the same person.
-  await supabase
-    .from("invitations")
-    .update({ revoked_at: new Date().toISOString() })
-    .eq("business_id", opts.businessId)
-    .ilike("email", opts.email)
-    .is("accepted_at", null)
-    .is("revoked_at", null);
-  const { error } = await supabase.from("invitations").insert({
-    business_id: opts.businessId,
-    email: opts.email.toLowerCase(),
-    role_id: opts.roleId,
-    employee_id: opts.employeeId ?? null,
-    token_hash: tokenHash,
-  });
-  if (error) return { emailed: false, error: friendly(error.message) };
-
-  const link = `${await origin()}/invite/${token}`;
-  const sent = await sendEmail({
-    to: opts.email,
-    subject: `You're invited to join ${opts.businessName} on ${appConfig.brand.name}`,
-    text: `${opts.inviterName} invited you to join ${opts.businessName} on ${appConfig.brand.name} as ${opts.roleName}.\n\nAccept the invitation: ${link}\n\nThe link expires in 14 days.`,
-    html: emailLayout(
-      `Join ${opts.businessName}`,
-      `<p>${escapeHtml(opts.inviterName)} invited you to join <strong>${escapeHtml(opts.businessName)}</strong> on ${escapeHtml(appConfig.brand.name)} as <strong>${escapeHtml(opts.roleName)}</strong>.</p>${emailButton(link, "Accept invitation")}<p style="font-size:13px;color:#5a6473">The link expires in 14 days. If you weren't expecting this, you can ignore this email.</p>`,
-    ),
-  });
-  return { link, emailed: sent.ok, error: sent.ok ? undefined : sent.error };
 }
 
 const personSchema = z.object({
@@ -365,34 +371,25 @@ export async function importEmployeesCsv(
   return { imported: created.length, invited };
 }
 
-export async function finishTeamStep(): Promise<void> {
+/** Last screen: mark setup finished and open Home. */
+export async function finishSetup(): Promise<void> {
   const user = await requireUser("/onboarding");
   const state = await getOnboardingState();
-  if (!state.businessId) redirect("/onboarding/business");
+  if (!state.businessId) redirect("/onboarding/company");
   const supabase = await createClient();
   await supabase.from("businesses").update({ onboarding_completed_at: new Date().toISOString() }).eq("id", state.businessId);
-  await saveDraft(user.id, { step: 6 });
-  redirect("/onboarding/done");
-}
-
-/** Last screen: mark the wizard finished and open the dashboard. */
-export async function completeOnboarding(): Promise<void> {
-  const user = await requireUser("/onboarding");
-  const state = await getOnboardingState();
-  if (state.businessId) {
-    await setActiveBusiness(state.businessId);
-    await saveDraft(user.id, { step: 6, completed: true });
-  }
+  await setActiveBusiness(state.businessId);
+  await saveDraft(user.id, { step: 5, completed: true });
   redirect("/app?welcome=1");
 }
 
-/** Start setting up an additional business. */
+/** Start setting up another company space. */
 export async function startNewBusiness(): Promise<void> {
   const user = await requireUser("/onboarding");
   const supabase = await createClient();
   await supabase.from("onboarding_drafts").delete().eq("user_id", user.id);
-  await saveDraft(user.id, { business_id: null, step: 2, data: { furthest: 2, skipped: [] } });
-  redirect("/onboarding/business");
+  await saveDraft(user.id, { business_id: null, step: 2, data: { furthest: 2, skipped: [], answers: {} } });
+  redirect("/onboarding/company");
 }
 
 /** Used by the invitation page. */
@@ -404,4 +401,3 @@ export async function acceptInvitation(token: string): Promise<ActionState> {
   await setActiveBusiness(data as string);
   redirect("/app");
 }
-

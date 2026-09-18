@@ -37,7 +37,8 @@ describe("schema safety net", () => {
     expect(rows.rows.length).toBeGreaterThan(90);
     for (const r of rows.rows) {
       expect(r.rls, `${r.relname} RLS`).toBe(true);
-      expect(r.policies, `${r.relname} policies`).toBeGreaterThan(0);
+      // contact_messages is written by the server only; no one may read it through the API.
+      if (r.relname !== "contact_messages") expect(r.policies, `${r.relname} policies`).toBeGreaterThan(0);
     }
   });
 
@@ -59,7 +60,7 @@ describe("schema safety net", () => {
          and not exists (select 1 from information_schema.columns col
                           where col.table_schema = 'public' and col.table_name = c.relname and col.column_name = 'business_id')`);
     // Only per-user / platform tables may lack business_id.
-    expect(rows.rows.map((r) => r.relname).sort()).toEqual(["businesses", "platform_admins", "profiles"]);
+    expect(rows.rows.map((r) => r.relname).sort()).toEqual(["businesses", "contact_messages", "platform_admins", "profiles"]);
   });
 
   it("only uses permission resources that exist in the module registry", () => {
@@ -74,7 +75,9 @@ describe("schema safety net", () => {
       for (const m of sql.matchAll(/v_resource := '([a-z_]+)'/g)) used.add(m[1]);
       for (const m of sql.matchAll(/audit_row\('([a-z_]+)'/g)) used.add(m[1]);
     }
-    const unknown = [...used].filter((r) => !known.has(r));
+    // Resources from before Transport + Expense claims were merged into Claims (old migrations still mention them).
+    const legacy = new Set(["transport_claims", "expenses"]);
+    const unknown = [...used].filter((r) => !known.has(r) && !legacy.has(r));
     expect(unknown).toEqual([]);
   });
 });
@@ -162,7 +165,9 @@ describe("roles and scopes", () => {
   });
 
   it("department heads see their whole department", async () => {
-    await asUser(db, f.users.ownerA, (tx) => tx.query(`update public.departments set head_employee_id = $1 where id = $2`, [f.empA.M, f.deptA.kitchen]));
+    await asUser(db, f.users.ownerA, (tx) =>
+      tx.query(`update public.departments set head_employee_id = $1 where id = $2`, [f.empA.M, f.deptA.kitchen]),
+    );
     await asUser(db, f.users.managerA, async (tx) => {
       expect(await count(tx, `select 1 from public.employees where id = $1`, [f.empA.S2])).toBe(1);
     });
@@ -176,7 +181,9 @@ describe("roles and scopes", () => {
   });
 
   it("staff cannot edit their own job details", async () => {
-    const r = await asUser(db, f.users.staffA, (tx) => tx.query(`update public.employees set status = 'terminated' where id = $1 returning id`, [f.empA.S1]));
+    const r = await asUser(db, f.users.staffA, (tx) =>
+      tx.query(`update public.employees set status = 'terminated' where id = $1 returning id`, [f.empA.S1]),
+    );
     expect(r.rows).toHaveLength(0);
   });
 });
@@ -184,7 +191,9 @@ describe("roles and scopes", () => {
 // ---------------------------------------------------------------------
 describe("salary privacy", () => {
   const salaries = (who: string) =>
-    asUser(db, who, async (tx) => (await tx.query<{ employee_id: string }>(`select employee_id from public.employee_compensation`)).rows.map((r) => r.employee_id));
+    asUser(db, who, async (tx) =>
+      (await tx.query<{ employee_id: string }>(`select employee_id from public.employee_compensation`)).rows.map((r) => r.employee_id),
+    );
 
   it("owner and payroll officer see all salaries", async () => {
     expect(await salaries(f.users.ownerA)).toHaveLength(3);
@@ -213,7 +222,9 @@ describe("salary privacy", () => {
     await asUser(db, f.users.ownerA, (tx) => tx.query(grantAll, [f.bizA, f.roleA.hr_manager]));
     expect(await salaries(f.users.hrA)).toHaveLength(3);
     await asUser(db, f.users.ownerA, (tx) =>
-      tx.query(`update public.role_permissions set scope = 'own' where role_id = $1 and resource = 'compensation' and action = 'view'`, [f.roleA.hr_manager]),
+      tx.query(`update public.role_permissions set scope = 'own' where role_id = $1 and resource = 'compensation' and action = 'view'`, [
+        f.roleA.hr_manager,
+      ]),
     );
     expect(await salaries(f.users.hrA)).toHaveLength(0);
   });
@@ -224,7 +235,11 @@ describe("privilege-escalation guards", () => {
   it("an admin cannot make themselves owner", async () => {
     await expectDenied(
       asUser(db, f.users.accountant, (tx) =>
-        tx.query(`update public.business_members set role_id = $1 where business_id = $2 and user_id = $3`, [f.roleA.owner, f.bizA, f.users.accountant]),
+        tx.query(`update public.business_members set role_id = $1 where business_id = $2 and user_id = $3`, [
+          f.roleA.owner,
+          f.bizA,
+          f.users.accountant,
+        ]),
       ),
     );
   });
@@ -251,7 +266,9 @@ describe("privilege-escalation guards", () => {
 
   it("the last owner cannot be removed or demoted", async () => {
     await expectDenied(
-      asUser(db, f.users.ownerA, (tx) => tx.query(`delete from public.business_members where business_id = $1 and user_id = $2`, [f.bizA, f.users.ownerA])),
+      asUser(db, f.users.ownerA, (tx) =>
+        tx.query(`delete from public.business_members where business_id = $1 and user_id = $2`, [f.bizA, f.users.ownerA]),
+      ),
     );
     await expectDenied(
       asUser(db, f.users.ownerA, (tx) =>
@@ -261,7 +278,9 @@ describe("privilege-escalation guards", () => {
   });
 
   it("staff cannot add themselves to another business", async () => {
-    const roleB = await asUser(db, f.users.ownerB, (tx) => one<{ id: string }>(tx, `select id from public.roles where business_id = $1 and key = 'admin'`, [f.bizB]));
+    const roleB = await asUser(db, f.users.ownerB, (tx) =>
+      one<{ id: string }>(tx, `select id from public.roles where business_id = $1 and key = 'admin'`, [f.bizB]),
+    );
     await expectDenied(
       asUser(db, f.users.staffA, (tx) =>
         tx.query(`insert into public.business_members (business_id, user_id, role_id) values ($1, $2, $3)`, [f.bizB, f.users.staffA, roleB.id]),
@@ -282,8 +301,17 @@ describe("self-service requests", () => {
   let leaveType: string;
 
   beforeAll(async () => {
-    leaveType = await asUser(db, f.users.ownerA, async (tx) =>
-      (await one<{ id: string }>(tx, `insert into public.leave_types (business_id, name, code, entitlement_days) values ($1, 'Annual leave', 'AL', 30) returning id`, [f.bizA])).id,
+    leaveType = await asUser(
+      db,
+      f.users.ownerA,
+      async (tx) =>
+        (
+          await one<{ id: string }>(
+            tx,
+            `insert into public.leave_types (business_id, name, code, entitlement_days) values ($1, 'Annual leave', 'AL', 30) returning id`,
+            [f.bizA],
+          )
+        ).id,
     );
   });
 
@@ -377,9 +405,18 @@ describe("payroll lock", () => {
       return { run: run.id, pre: pre.id };
     });
 
-    await expectDenied(asUser(db, f.users.payrollA, (tx) => tx.query(`update public.payroll_run_employees set net_pay = 99999 where id = $1`, [runId.pre])), /locked/);
-    await expectDenied(asUser(db, f.users.payrollA, (tx) => tx.query(`update public.payroll_runs set total_net = 1 where id = $1`, [runId.run])), /locked/);
-    await expectDenied(asUser(db, f.users.payrollA, (tx) => tx.query(`delete from public.payroll_runs where id = $1`, [runId.run])), /cannot be deleted/);
+    await expectDenied(
+      asUser(db, f.users.payrollA, (tx) => tx.query(`update public.payroll_run_employees set net_pay = 99999 where id = $1`, [runId.pre])),
+      /locked/,
+    );
+    await expectDenied(
+      asUser(db, f.users.payrollA, (tx) => tx.query(`update public.payroll_runs set total_net = 1 where id = $1`, [runId.run])),
+      /locked/,
+    );
+    await expectDenied(
+      asUser(db, f.users.payrollA, (tx) => tx.query(`delete from public.payroll_runs where id = $1`, [runId.run])),
+      /cannot be deleted/,
+    );
     await expectDenied(
       asUser(db, f.users.payrollA, (tx) => tx.query(`update public.payroll_runs set status = 'reversed' where id = $1`, [runId.run])),
       /reversal_reason|check constraint/,
@@ -387,12 +424,16 @@ describe("payroll lock", () => {
 
     // Payslip becomes visible to the employee once published (allowed after finalization).
     await asUser(db, f.users.staffA, async (tx) => expect(await count(tx, `select 1 from public.payroll_run_employees`)).toBe(0));
-    await asUser(db, f.users.payrollA, (tx) => tx.query(`update public.payroll_run_employees set payslip_published_at = now() where id = $1`, [runId.pre]));
+    await asUser(db, f.users.payrollA, (tx) =>
+      tx.query(`update public.payroll_run_employees set payslip_published_at = now() where id = $1`, [runId.pre]),
+    );
     await asUser(db, f.users.staffA, async (tx) => expect(await count(tx, `select 1 from public.payroll_run_employees`)).toBe(1));
     await asUser(db, f.users.staffA2, async (tx) => expect(await count(tx, `select 1 from public.payroll_run_employees`)).toBe(0));
 
     await asUser(db, f.users.payrollA, (tx) =>
-      tx.query(`update public.payroll_runs set status = 'reversed', reversal_reason = 'Wrong overtime rate', reversed_at = now() where id = $1`, [runId.run]),
+      tx.query(`update public.payroll_runs set status = 'reversed', reversal_reason = 'Wrong overtime rate', reversed_at = now() where id = $1`, [
+        runId.run,
+      ]),
     );
   });
 
@@ -407,16 +448,24 @@ describe("support access", () => {
     await asUser(db, f.users.support, async (tx) => expect(await count(tx, `select 1 from public.employees`)).toBe(0));
 
     const grant = await asUser(db, f.users.ownerA, (tx) =>
-      one<{ id: string }>(tx, `insert into public.support_access_grants (business_id, reason, expires_at) values ($1, 'Help with payroll', now() + interval '2 hours') returning id`, [f.bizA]),
+      one<{ id: string }>(
+        tx,
+        `insert into public.support_access_grants (business_id, reason, expires_at) values ($1, 'Help with payroll', now() + interval '2 hours') returning id`,
+        [f.bizA],
+      ),
     );
     await asUser(db, f.users.support, async (tx) => {
       expect(await count(tx, `select 1 from public.employees where business_id = $1`, [f.bizA])).toBe(3);
       expect(await count(tx, `select 1 from public.employees where business_id = $1`, [f.bizB])).toBe(0);
     });
-    const upd = await asUser(db, f.users.support, (tx) => tx.query(`update public.employees set first_name = 'X' where business_id = $1 returning id`, [f.bizA]));
+    const upd = await asUser(db, f.users.support, (tx) =>
+      tx.query(`update public.employees set first_name = 'X' where business_id = $1 returning id`, [f.bizA]),
+    );
     expect(upd.rows).toHaveLength(0);
 
-    await asUser(db, f.users.ownerA, (tx) => tx.query(`update public.support_access_grants set expires_at = now() - interval '1 minute' where id = $1`, [grant.id]));
+    await asUser(db, f.users.ownerA, (tx) =>
+      tx.query(`update public.support_access_grants set expires_at = now() - interval '1 minute' where id = $1`, [grant.id]),
+    );
     await asUser(db, f.users.support, async (tx) => expect(await count(tx, `select 1 from public.employees`)).toBe(0));
   });
 });
@@ -454,11 +503,27 @@ describe("file storage rules", () => {
 describe("public careers page", () => {
   it("shows only open public vacancies, and only when the careers page is on", async () => {
     const slug = await asUser(db, f.users.ownerA, async (tx) => {
-      await tx.query(`insert into public.vacancies (business_id, title, slug, status, is_public, salary_min, salary_max) values ($1, 'Chef', 'chef', 'open', true, 10000, 15000)`, [f.bizA]);
-      await tx.query(`insert into public.vacancies (business_id, title, slug, status, is_public) values ($1, 'Secret role', 'secret', 'open', false)`, [f.bizA]);
+      await tx.query(
+        `insert into public.vacancies (business_id, title, slug, status, is_public, salary_min, salary_max) values ($1, 'Chef', 'chef', 'open', true, 10000, 15000)`,
+        [f.bizA],
+      );
+      await tx.query(
+        `insert into public.vacancies (business_id, title, slug, status, is_public) values ($1, 'Secret role', 'secret', 'open', false)`,
+        [f.bizA],
+      );
       return (await one<{ slug: string }>(tx, `select slug from public.businesses where id = $1`, [f.bizA])).slug;
     });
-    const get = () => asUser(db, null, async (tx) => (await one<{ c: { vacancies: { title: string; salary_min: number | null }[] } | null }>(tx, `select public.get_public_careers($1) as c`, [slug])).c);
+    const get = () =>
+      asUser(
+        db,
+        null,
+        async (tx) =>
+          (
+            await one<{ c: { vacancies: { title: string; salary_min: number | null }[] } | null }>(tx, `select public.get_public_careers($1) as c`, [
+              slug,
+            ])
+          ).c,
+      );
     expect(await get()).toBeNull();
     await asUser(db, f.users.ownerA, (tx) => tx.query(`update public.businesses set careers_page_enabled = true where id = $1`, [f.bizA]));
     const page = await get();

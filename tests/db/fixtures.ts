@@ -64,7 +64,11 @@ export async function buildFixture(db: PGlite): Promise<Fixture> {
     const roles = await tx.query<{ key: string; id: string }>(`select key, id from public.roles where business_id = $1`, [bizA]);
     const roleA = Object.fromEntries(roles.rows.map((r) => [r.key, r.id]));
     const branch = await one<{ id: string }>(tx, `insert into public.branches (business_id, name) values ($1, 'Male Office') returning id`, [bizA]);
-    const ops = await one<{ id: string }>(tx, `insert into public.departments (business_id, name, branch_id) values ($1, 'Front Office', $2) returning id`, [bizA, branch.id]);
+    const ops = await one<{ id: string }>(
+      tx,
+      `insert into public.departments (business_id, name, branch_id) values ($1, 'Front Office', $2) returning id`,
+      [bizA, branch.id],
+    );
     const kitchen = await one<{ id: string }>(tx, `insert into public.departments (business_id, name) values ($1, 'Kitchen') returning id`, [bizA]);
     const emp = async (code: string, first: string, dept: string, manager: string | null) =>
       (
@@ -98,11 +102,10 @@ export async function buildFixture(db: PGlite): Promise<Fixture> {
       [S1, 12000],
       [S2, 11000],
     ] as const) {
-      await tx.query(`insert into public.employee_compensation (business_id, employee_id, effective_date, basic_salary) values ($1, $2, '2024-01-01', $3)`, [
-        bizA,
-        e,
-        salary,
-      ]);
+      await tx.query(
+        `insert into public.employee_compensation (business_id, employee_id, effective_date, basic_salary) values ($1, $2, '2024-01-01', $3)`,
+        [bizA, e, salary],
+      );
     }
     return { roleA, empA: { M, S1, S2 }, deptA: { ops: ops.id, kitchen: kitchen.id } };
   });
@@ -123,10 +126,10 @@ export async function buildFixture(db: PGlite): Promise<Fixture> {
       X.id,
     ]);
     await tx.query(`insert into public.business_members (business_id, user_id, role_id) values ($1, $2, $3)`, [bizB, users.accountant, admin.id]);
-    await tx.query(`insert into public.employee_compensation (business_id, employee_id, effective_date, basic_salary) values ($1, $2, '2024-01-01', 9000)`, [
-      bizB,
-      X.id,
-    ]);
+    await tx.query(
+      `insert into public.employee_compensation (business_id, employee_id, effective_date, basic_salary) values ($1, $2, '2024-01-01', 9000)`,
+      [bizB, X.id],
+    );
     return { empB: { X: X.id }, deptB: dept.id };
   });
 

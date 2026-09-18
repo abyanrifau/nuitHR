@@ -8,7 +8,7 @@ import { signOut } from "@/lib/auth/actions";
 import { getOnboardingState, WIZARD_STEPS } from "@/lib/onboarding/state";
 import { ProgressBar } from "./progress-bar";
 
-export const metadata: Metadata = { title: "Set up your business" };
+export const metadata: Metadata = { title: "Set up your company space" };
 
 export default async function OnboardingLayout({ children }: { children: ReactNode }) {
   const state = await getOnboardingState();

@@ -42,7 +42,11 @@ function full(resource: string, scope: PermissionScope = "all"): Grants {
   return { [resource]: Object.fromEntries(def.actions.map((a) => [a, scope])) };
 }
 
-const SALARY_RESOURCES = new Set(allResources().filter((r) => r.ownerGrantOnly).map((r) => r.key));
+const SALARY_RESOURCES = new Set(
+  allResources()
+    .filter((r) => r.ownerGrantOnly)
+    .map((r) => r.key),
+);
 
 // Things every signed-in staff member can do for themselves.
 const SELF_SERVICE: Grants = {
@@ -55,8 +59,7 @@ const SELF_SERVICE: Grants = {
   roster: { view: "own" },
   leave: { view: "own", create: "own" },
   payslips: { view: "own", export: "own" },
-  transport_claims: { view: "own", create: "own" },
-  expenses: { view: "own", create: "own" },
+  claims: { view: "own", create: "own" },
   onboarding: { view: "own" },
   compliance: { view: "own" },
   training: { view: "own", edit: "own" },
@@ -119,8 +122,7 @@ export const DEFAULT_ROLES: RoleTemplate[] = [
         full("surveys"),
         full("announcements"),
         { users: { view: "all", create: "all", edit: "all" } },
-        { transport_claims: { view: "all", approve: "all", export: "all" } },
-        { expenses: { view: "all", approve: "all", export: "all" } },
+        { claims: { view: "all", approve: "all", export: "all" } },
         { audit: { view: "all" }, settings: { view: "all" }, modules: { view: "all" }, roles: { view: "all" } },
         SELF_SERVICE,
       ),
@@ -129,7 +131,7 @@ export const DEFAULT_ROLES: RoleTemplate[] = [
   {
     key: "payroll_officer",
     name: "Payroll Officer",
-    description: "Runs payroll and manages salaries, loans, claims payments and payslips.",
+    description: "Runs payroll and looks after salaries, loans, claims and payslips.",
     permissions: expand(
       merge(
         full("payroll"),
@@ -137,8 +139,7 @@ export const DEFAULT_ROLES: RoleTemplate[] = [
         full("compensation"),
         { employees: { view: "all", export: "all" }, org: { view: "all" } },
         { attendance: { view: "all", export: "all" }, leave: { view: "all", export: "all" } },
-        full("transport_claims"),
-        full("expenses"),
+        full("claims"),
         { approvals: { view: "all", approve: "all" } },
         { settings: { view: "all" } },
         SELF_SERVICE,
@@ -157,8 +158,7 @@ export const DEFAULT_ROLES: RoleTemplate[] = [
         { attendance: { view: "team", approve: "team", export: "team" } },
         { roster: { view: "team", create: "team", edit: "team", delete: "team" } },
         { leave: { view: "team", approve: "team", export: "team" } },
-        { transport_claims: { view: "team", approve: "team" } },
-        { expenses: { view: "team", approve: "team" } },
+        { claims: { view: "team", approve: "team" } },
         { onboarding: { view: "team", edit: "team" } },
         { compliance: { view: "team" } },
         { training: { view: "team" } },
@@ -172,7 +172,7 @@ export const DEFAULT_ROLES: RoleTemplate[] = [
   {
     key: "employee",
     name: "Employee",
-    description: "Uses the staff app: clock in, apply for leave, see payslips, submit claims.",
+    description: "Uses the staff app to clock in, ask for time off, see payslips and send claims.",
     permissions: expand(SELF_SERVICE),
   },
 ];

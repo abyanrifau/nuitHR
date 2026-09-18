@@ -21,9 +21,8 @@ export const appConfig = {
     name: "Nuit Works",
     /** Short name used on the phone home screen when staff install the app. */
     shortName: "Nuit Works",
-    tagline: "HR that runs itself, from clock-in to payslip.",
-    description:
-      "An HR and workforce platform for growing businesses. Pick only the modules you need: attendance, leave, payroll, claims, hiring, compliance, learning and performance.",
+    tagline: "Staff, shifts and pay, handled in one place.",
+    description: "People, time, pay and paperwork for businesses in the Maldives. Answer a few questions and switch on only the tools you need.",
     /** Your company's legal name for the footer, Terms and Privacy pages. */
     legalName: "Nuit Works",
     supportEmail: "support@example.com",
@@ -59,28 +58,30 @@ export const appConfig = {
   // Free trial
   // ----------------------------------------------------------
   trial: {
-    days: 14,
+    /** Length of the free trial in days. */
+    days: 30,
   },
 
   // ----------------------------------------------------------
   // PLACEHOLDER PRICES — replace with your real prices.
-  // Monthly price for a module = base + (perEmployee × employees).
+  // Every plan pays the foundation base fee (people directory,
+  // requests, letters & files, access & roles, staff app).
+  // Each extra tool is an add-on:
+  //   add-on price = base + (perPerson × number of people)
   // ----------------------------------------------------------
   pricing: {
     currency: "MVR",
-    /** Price shown as "from X / month" on the marketing site. */
-    modules: {
-      core: { base: 350, perEmployee: 10 },
-      attendance: { base: 0, perEmployee: 8 },
-      leave: { base: 0, perEmployee: 5 },
-      recruitment: { base: 250, perEmployee: 0 },
-      onboarding: { base: 0, perEmployee: 3 },
-      compliance: { base: 0, perEmployee: 4 },
-      payroll: { base: 200, perEmployee: 12 },
-      transport: { base: 0, perEmployee: 3 },
-      expenses: { base: 0, perEmployee: 3 },
-      learning: { base: 150, perEmployee: 4 },
-      performance: { base: 0, perEmployee: 5 },
+    foundation: { base: 450, perPerson: 10 },
+    tools: {
+      recruitment: { base: 250, perPerson: 0 },
+      onboarding: { base: 0, perPerson: 3 },
+      attendance: { base: 0, perPerson: 8 },
+      leave: { base: 0, perPerson: 5 },
+      compliance: { base: 0, perPerson: 4 },
+      payroll: { base: 200, perPerson: 12 },
+      claims: { base: 0, perPerson: 4 },
+      learning: { base: 150, perPerson: 4 },
+      performance: { base: 0, perPerson: 5 },
     },
   },
 
@@ -124,12 +125,66 @@ export const appConfig = {
     },
     /** Starting leave entitlements (days per year). Check the Employment Act for current values. */
     leave: [
-      { code: "AL", name: "Annual leave", days: 30, paid: true, accrual: "monthly" as const, carryForward: 0, gender: "any" as const, requiresDocument: false },
-      { code: "SL", name: "Sick leave", days: 30, paid: true, accrual: "upfront" as const, carryForward: 0, gender: "any" as const, requiresDocument: true },
-      { code: "FRL", name: "Family responsibility leave", days: 10, paid: true, accrual: "upfront" as const, carryForward: 0, gender: "any" as const, requiresDocument: false },
-      { code: "ML", name: "Maternity leave", days: 60, paid: true, accrual: "upfront" as const, carryForward: 0, gender: "female" as const, requiresDocument: true },
-      { code: "PL", name: "Paternity leave", days: 3, paid: true, accrual: "upfront" as const, carryForward: 0, gender: "male" as const, requiresDocument: false },
-      { code: "UL", name: "Unpaid leave", days: 0, paid: false, accrual: "none" as const, carryForward: 0, gender: "any" as const, requiresDocument: false },
+      {
+        code: "AL",
+        name: "Annual leave",
+        days: 30,
+        paid: true,
+        accrual: "monthly" as const,
+        carryForward: 0,
+        gender: "any" as const,
+        requiresDocument: false,
+      },
+      {
+        code: "SL",
+        name: "Sick leave",
+        days: 30,
+        paid: true,
+        accrual: "upfront" as const,
+        carryForward: 0,
+        gender: "any" as const,
+        requiresDocument: true,
+      },
+      {
+        code: "FRL",
+        name: "Family responsibility leave",
+        days: 10,
+        paid: true,
+        accrual: "upfront" as const,
+        carryForward: 0,
+        gender: "any" as const,
+        requiresDocument: false,
+      },
+      {
+        code: "ML",
+        name: "Maternity leave",
+        days: 60,
+        paid: true,
+        accrual: "upfront" as const,
+        carryForward: 0,
+        gender: "female" as const,
+        requiresDocument: true,
+      },
+      {
+        code: "PL",
+        name: "Paternity leave",
+        days: 3,
+        paid: true,
+        accrual: "upfront" as const,
+        carryForward: 0,
+        gender: "male" as const,
+        requiresDocument: false,
+      },
+      {
+        code: "UL",
+        name: "Unpaid leave",
+        days: 0,
+        paid: false,
+        accrual: "none" as const,
+        carryForward: 0,
+        gender: "any" as const,
+        requiresDocument: false,
+      },
     ],
   },
 

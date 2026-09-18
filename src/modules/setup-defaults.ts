@@ -1,5 +1,6 @@
 /**
- * Pre-filled answers for the quick-setup screens (wizard step 4). They
+ * Pre-filled settings for each tool (applied when a tool is switched on,
+ * and editable in Workspace → Tools). They
  * come from src/config/app.config.ts, so changing a default rate there
  * changes it here too. Users can edit everything before saving.
  */
@@ -10,7 +11,7 @@ import type { Industry } from "./selection";
 import type { ModuleKey } from "./types";
 
 /** Modules that have a quick-setup screen, in the order they are shown. */
-export const SETUP_ORDER: ModuleKey[] = ["employees", "leave", "attendance", "payroll", "transport", "performance"];
+export const SETUP_ORDER: ModuleKey[] = ["employees", "leave", "attendance", "payroll", "performance"];
 
 // ---------------------------------------------------------------------
 // Departments & positions
@@ -83,7 +84,12 @@ export const leaveSetupSchema = z.object({
   leave_types: z
     .array(
       z.object({
-        code: z.string().trim().min(1).max(6).regex(/^[A-Za-z0-9]+$/, "Letters and numbers only."),
+        code: z
+          .string()
+          .trim()
+          .min(1)
+          .max(6)
+          .regex(/^[A-Za-z0-9]+$/, "Letters and numbers only."),
         name: z.string().trim().min(1, "Enter a name.").max(60),
         days: z.coerce.number().min(0, "Can't be negative.").max(366),
         paid: z.boolean(),
@@ -162,10 +168,6 @@ export const payrollSetupSchema = z.object({
   ),
 });
 
-export const transportSetupSchema = z.object({
-  claims_cutoff_day: z.coerce.number().int().min(1, "Pick a day from 1 to 28.").max(28, "Pick a day from 1 to 28."),
-});
-
 export const performanceSetupSchema = z.object({
   cycle: z
     .object({
@@ -184,7 +186,6 @@ export const SETUP_SCHEMAS = {
   leave: leaveSetupSchema,
   attendance: attendanceSetupSchema,
   payroll: payrollSetupSchema,
-  transport: transportSetupSchema,
   performance: performanceSetupSchema,
 } as const;
 
@@ -196,10 +197,7 @@ export function isSetupModule(key: string): key is SetupModule {
 }
 
 /** Default answers for a module's quick-setup screen. */
-export function defaultSetup<M extends SetupModule>(
-  module: M,
-  ctx: { industry: Industry; country: string; today?: Date },
-): SetupConfig<M> {
+export function defaultSetup<M extends SetupModule>(module: M, ctx: { industry: Industry; country: string; today?: Date }): SetupConfig<M> {
   const today = ctx.today ?? new Date();
   const r = appConfig.rates;
   const defaults: { [K in SetupModule]: SetupConfig<K> } = {
@@ -260,7 +258,6 @@ export function defaultSetup<M extends SetupModule>(
         { code: "ADV", name: "Salary advance", kind: "deduction", category: "advance", taxable: false, pensionable: false },
       ],
     },
-    transport: { claims_cutoff_day: 20 },
     performance: {
       cycle: {
         name: `${today.getFullYear()} annual review`,

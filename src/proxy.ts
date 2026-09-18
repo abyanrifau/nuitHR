@@ -5,12 +5,12 @@ import { createServerClient } from "@supabase/ssr";
  * Runs before every page request:
  *  1. keeps the user's sign-in session fresh (Supabase cookies), and
  *  2. sends signed-out visitors to the login page when they open a
- *     private area (/app, /portal, /onboarding).
+ *     private area (/app, /staff, /onboarding).
  *
  * This is only a convenience redirect. Every private page also checks
  * the user on the server, and the database enforces access itself.
  */
-const PRIVATE_PREFIXES = ["/app", "/portal", "/onboarding"];
+const PRIVATE_PREFIXES = ["/app", "/staff", "/onboarding"];
 const AUTH_PAGES = ["/login", "/signup"];
 
 export async function proxy(request: NextRequest) {
@@ -50,6 +50,18 @@ export async function proxy(request: NextRequest) {
     login.search = "";
     login.searchParams.set("next", path + request.nextUrl.search);
     return redirectWithCookies(login, response);
+  }
+
+  // Two-step sign-in: people who switched it on must enter their code before private pages open.
+  if (isPrivate && signedIn && data?.claims?.aal !== "aal2") {
+    const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (aal?.nextLevel === "aal2" && aal.currentLevel !== "aal2") {
+      const verify = request.nextUrl.clone();
+      verify.pathname = "/two-step";
+      verify.search = "";
+      verify.searchParams.set("next", path + request.nextUrl.search);
+      return redirectWithCookies(verify, response);
+    }
   }
 
   if (signedIn && AUTH_PAGES.includes(path)) {

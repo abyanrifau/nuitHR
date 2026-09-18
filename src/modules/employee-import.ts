@@ -13,7 +13,7 @@ export const IMPORT_COLUMNS = [
   { key: "phone", label: "Phone", help: "" },
   { key: "department", label: "Department", help: "New departments are created automatically." },
   { key: "position", label: "Position", help: "New positions are created automatically." },
-  { key: "branch", label: "Branch", help: "Must match one of your branches." },
+  { key: "branch", label: "Location", help: "Must match one of your locations." },
   { key: "join_date", label: "Join date", help: "DD/MM/YYYY" },
   { key: "probation_end_date", label: "Probation end date", help: "DD/MM/YYYY. Leave empty if not on probation." },
   { key: "gender", label: "Gender", help: "female, male, other" },
@@ -52,13 +52,51 @@ export interface ImportPreview {
 }
 
 const NATIONALITIES: Record<string, string> = {
-  maldives: "MV", maldivian: "MV", india: "IN", indian: "IN", bangladesh: "BD", bangladeshi: "BD",
-  "sri lanka": "LK", "sri lankan": "LK", nepal: "NP", nepali: "NP", pakistan: "PK", pakistani: "PK",
-  philippines: "PH", filipino: "PH", indonesia: "ID", indonesian: "ID", thailand: "TH", thai: "TH",
-  china: "CN", chinese: "CN", "united kingdom": "GB", british: "GB", uk: "GB", germany: "DE", german: "DE",
-  italy: "IT", italian: "IT", russia: "RU", russian: "RU", "united states": "US", american: "US", usa: "US",
-  australia: "AU", australian: "AU", egypt: "EG", egyptian: "EG", malaysia: "MY", malaysian: "MY",
-  myanmar: "MM", vietnam: "VN", vietnamese: "VN", france: "FR", french: "FR", spain: "ES", spanish: "ES",
+  maldives: "MV",
+  maldivian: "MV",
+  india: "IN",
+  indian: "IN",
+  bangladesh: "BD",
+  bangladeshi: "BD",
+  "sri lanka": "LK",
+  "sri lankan": "LK",
+  nepal: "NP",
+  nepali: "NP",
+  pakistan: "PK",
+  pakistani: "PK",
+  philippines: "PH",
+  filipino: "PH",
+  indonesia: "ID",
+  indonesian: "ID",
+  thailand: "TH",
+  thai: "TH",
+  china: "CN",
+  chinese: "CN",
+  "united kingdom": "GB",
+  british: "GB",
+  uk: "GB",
+  germany: "DE",
+  german: "DE",
+  italy: "IT",
+  italian: "IT",
+  russia: "RU",
+  russian: "RU",
+  "united states": "US",
+  american: "US",
+  usa: "US",
+  australia: "AU",
+  australian: "AU",
+  egypt: "EG",
+  egyptian: "EG",
+  malaysia: "MY",
+  malaysian: "MY",
+  myanmar: "MM",
+  vietnam: "VN",
+  vietnamese: "VN",
+  france: "FR",
+  french: "FR",
+  spain: "ES",
+  spanish: "ES",
 };
 
 const CONTRACT_TYPES = ["permanent", "fixed_term", "part_time", "casual", "intern", "consultant"];
@@ -70,14 +108,35 @@ for (const c of IMPORT_COLUMNS) {
   HEADER_ALIASES[c.label.toLowerCase()] = c.key;
 }
 Object.assign(HEADER_ALIASES, {
-  "employee id": "employee_code", "staff id": "employee_code", id: "employee_code", code: "employee_code",
-  "first name": "first_name", firstname: "first_name", "given name": "first_name",
-  "last name": "last_name", lastname: "last_name", surname: "last_name",
-  email: "work_email", "email address": "work_email", "work email": "work_email",
-  mobile: "phone", "phone number": "phone", "job title": "position", title: "position",
-  location: "branch", "start date": "join_date", "joining date": "join_date", "date joined": "join_date",
-  "probation end": "probation_end_date", sex: "gender", country: "nationality",
-  contract: "contract_type", "employment type": "contract_type", manager: "manager_code", "manager id": "manager_code",
+  "employee id": "employee_code",
+  "staff id": "employee_code",
+  id: "employee_code",
+  code: "employee_code",
+  "first name": "first_name",
+  firstname: "first_name",
+  "given name": "first_name",
+  "last name": "last_name",
+  lastname: "last_name",
+  surname: "last_name",
+  email: "work_email",
+  "email address": "work_email",
+  "work email": "work_email",
+  mobile: "phone",
+  "phone number": "phone",
+  "job title": "position",
+  title: "position",
+  location: "branch",
+  branch: "branch",
+  "start date": "join_date",
+  "joining date": "join_date",
+  "date joined": "join_date",
+  "probation end": "probation_end_date",
+  sex: "gender",
+  country: "nationality",
+  contract: "contract_type",
+  "employment type": "contract_type",
+  manager: "manager_code",
+  "manager id": "manager_code",
 } satisfies Record<string, ImportKey>);
 
 /** Parses DD/MM/YYYY, D/M/YYYY, DD-MM-YYYY or YYYY-MM-DD into YYYY-MM-DD. */
@@ -100,8 +159,38 @@ export function parseDate(value: string): string | null {
 export function templateCsv(): string {
   return toCsv([
     IMPORT_COLUMNS.map((c) => c.label),
-    ["", "Aishath", "Rasheed", "aishath@example.com", "+960 7771234", "Front Office", "Receptionist", "", "01/03/2025", "", "female", "Maldives", "permanent", ""],
-    ["", "Rahul", "Kumar", "rahul@example.com", "+960 9991234", "Food & Beverage", "Cook", "", "15/06/2024", "15/09/2024", "male", "India", "fixed_term", ""],
+    [
+      "",
+      "Aishath",
+      "Rasheed",
+      "aishath@example.com",
+      "+960 7771234",
+      "Front Office",
+      "Receptionist",
+      "",
+      "01/03/2025",
+      "",
+      "female",
+      "Maldives",
+      "permanent",
+      "",
+    ],
+    [
+      "",
+      "Rahul",
+      "Kumar",
+      "rahul@example.com",
+      "+960 9991234",
+      "Food & Beverage",
+      "Cook",
+      "",
+      "15/06/2024",
+      "15/09/2024",
+      "male",
+      "India",
+      "fixed_term",
+      "",
+    ],
   ]);
 }
 
@@ -171,7 +260,7 @@ export function previewImport(
     if (branchRaw) {
       const found = branchNames.get(branchRaw.toLowerCase());
       if (found) branch = found;
-      else errors.push(`Branch "${branchRaw}" doesn't exist. Use one of: ${ctx.branches.join(", ") || "(add a branch first)"}.`);
+      else errors.push(`Location "${branchRaw}" doesn't exist. Use one of: ${ctx.branches.join(", ") || "(add a location first)"}.`);
     }
 
     const dateField = (key: "join_date" | "probation_end_date", label: string) => {
@@ -186,9 +275,7 @@ export function previewImport(
     if (join_date && probation_end_date && probation_end_date < join_date) errors.push("Probation can't end before the join date.");
 
     const genderRaw = get(cells, "gender").toLowerCase();
-    const gender = (
-      { f: "female", female: "female", m: "male", male: "male", other: "other" } as Record<string, ImportRow["gender"]>
-    )[genderRaw];
+    const gender = ({ f: "female", female: "female", m: "male", male: "male", other: "other" } as Record<string, ImportRow["gender"]>)[genderRaw];
     if (genderRaw && !gender) errors.push(`Gender "${genderRaw}" should be female, male or other.`);
 
     const natRaw = get(cells, "nationality");
@@ -199,9 +286,12 @@ export function previewImport(
       else errors.push(`Nationality "${natRaw}" wasn't recognised. Use the 2-letter country code, e.g. MV, IN, BD.`);
     }
 
-    const contractRaw = get(cells, "contract_type").toLowerCase().replace(/[\s-]+/g, "_");
+    const contractRaw = get(cells, "contract_type")
+      .toLowerCase()
+      .replace(/[\s-]+/g, "_");
     const contract_type = contractRaw || "permanent";
-    if (!CONTRACT_TYPES.includes(contract_type)) errors.push(`Contract type "${get(cells, "contract_type")}" should be one of: ${CONTRACT_TYPES.join(", ")}.`);
+    if (!CONTRACT_TYPES.includes(contract_type))
+      errors.push(`Contract type "${get(cells, "contract_type")}" should be one of: ${CONTRACT_TYPES.join(", ")}.`);
 
     const manager_code = get(cells, "manager_code");
     if (manager_code) {

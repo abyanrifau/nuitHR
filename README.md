@@ -1,28 +1,35 @@
-# [BRAND] — HR & Workforce Platform
+# Nuit Works: HR for businesses in the Maldives
 
-A multi-business (multi-tenant) HR platform. A business owner signs up, picks only the HR modules they need, and gets a private workspace. Staff use a phone-friendly portal to clock in, apply for leave, see payslips and submit claims.
+People, time, pay and paperwork for multiple companies (each in its own sealed "company space"). An owner signs up, answers a few questions about how they work, and gets only the tools that fit. Staff use a phone-friendly staff app.
 
 - **Built with:** Next.js 16, TypeScript, Tailwind CSS, Supabase (login, database, file storage), deployed on Vercel.
-- **Defaults:** Maldives first (MVR, Indian/Maldives time, DD/MM/YYYY), but every business can change these.
+- **Defaults:** MVR, Indian/Maldives time, DD/MM/YYYY. Every company can change these.
+- **Brand name, prices, trial length and default rates:** [`src/config/app.config.ts`](src/config/app.config.ts).
+- **Colours, fonts, spacing:** the design tokens at the top of [`src/app/globals.css`](src/app/globals.css).
 
-> **Brand name, colours, prices and default rates** all live in one file:
-> [`src/config/app.config.ts`](src/config/app.config.ts). Change `[BRAND]` there and it updates everywhere.
-
----
+### Words used in the product
+| Say | Meaning |
+|---|---|
+| **Tools** | The parts of the product a company switches on (internally still called "modules" in the code) |
+| **Foundation** | Always included: People directory, Requests, Letters & files, Access & roles, Staff app |
+| **Hire / Run / Pay / Grow** | The four stages tools are grouped into |
+| **Company space** | One company's private area |
+| **Workspace** | Settings area in the app (Workspace → Tools, Company settings) |
+| **Jump to** | The command bar (Ctrl+K / Cmd+K) |
 
 ## Build progress
 
 | Phase | What | Status |
 |---|---|---|
 | 1 | Project setup, database for every module, security rules, module registry, sign-in | ✅ Done |
-| 2 | Registration & module-selection wizard, Settings → Modules | ✅ Done |
-| 3 | Core: employees, organization, roles, approvals, dashboard, notifications, documents & letters | Next |
-| 4 | Staff portal (installable phone app) | |
+| 2 | Sign-up, question-based setup, Workspace → Tools | ✅ Done (restructured) |
+| 3 | Foundation: people, org chart, access & roles, requests, letters & files, company settings, notifications, news, activity log, data export, two-step sign-in, support | ✅ Done |
+| 4 | Staff app (installable phone app at `/staff`) | Next |
 | 5 | Attendance & Leave | |
 | 6 | Payroll, Transport Allowance, Expense Claims | |
 | 7 | Recruitment, Onboarding, Compliance | |
 | 8 | Learning & People Development | |
-| 9 | Marketing website, pricing calculator, help centre | |
+| 9 | Marketing website, pricing calculator, help centre | ✅ Structure and pages done early; content grows with each phase |
 | 10 | Demo data, security review, performance check, go live on Vercel | |
 
 ---
@@ -78,7 +85,7 @@ In a terminal in the project folder, run:
 npm run db:migrate
 ```
 
-You should see `✔ Applied 7 change(s). Your database is ready.` Run the same command again any time a later phase adds new tables. It only applies what's new.
+You should see `✔ Applied 8 change(s). Your database is ready.` Run the same command again any time a later phase adds new tables. It only applies what's new.
 
 ### Step 5: Tell Supabase where the app lives
 
@@ -106,17 +113,41 @@ Open **http://localhost:3000/setup** in your browser. Every line should have a g
 
 | Page | Address | Needs |
 |---|---|---|
-| Home | `/` | nothing |
-| Sign up (wizard step 1) | `/signup` | Supabase connected |
-| Log in / forgot password | `/login`, `/forgot-password` | Supabase connected |
-| Business setup wizard (steps 2–6) | `/onboarding` | signed in |
-| Dashboard + getting-started checklist | `/app` | signed in, business set up |
-| Settings → Modules | `/app/settings/modules` | signed in (owner/admin to change) |
-| Accept an invitation | `/invite/…` (link from the email) | the invitation link |
+| Home (marketing) | `/` | nothing |
+| Product | `/product` | nothing |
+| Industries | `/industries` | nothing |
+| Pricing (calculator) | `/pricing` | nothing |
+| Help centre | `/help`, `/help/owner`, `/help/hr`, `/help/manager`, `/help/staff`, `/help/guides/…` | nothing |
+| Contact | `/contact` | nothing (messages are stored in the `contact_messages` table) |
+| Sign up / log in / forgot password | `/signup`, `/login`, `/forgot-password` | Supabase connected |
+| Setup (5 screens) | `/onboarding` → `/onboarding/company`, `/questions`, `/tools`, `/invite` | signed in |
+| Home (in the app) | `/app` | signed in, setup finished |
+| Requests (inbox, your requests, stand-in) | `/app/requests` | signed in |
+| People (list, search, filters, CSV export) | `/app/people` | rights to see people |
+| Add a person | `/app/people/new` | rights to add people |
+| A person's profile (tabs: personal, job, emergency, ID, salary & bank, files, login, history) | `/app/people/<id>` | rights to see people (salary tab only with salary rights) |
+| Org chart and company structure | `/app/people/org-chart` | rights to see company structure |
+| Letters & files (make a letter, requests, sent letters, templates) | `/app/letters` | rights to letters |
+| News | `/app/news` | rights to post news |
+| Notifications | `/app/notifications` | signed in |
+| Your account (name, two-step sign-in, notification choices) | `/app/account` | signed in |
+| Two-step sign-in code | `/two-step` | shown after password when two-step is on |
+| Workspace → Tools | `/app/workspace/tools` | signed in (owner/admin to change) |
+| Workspace → People & access (logins, invitations, roles, permission grid) | `/app/workspace/people` | owner/admin |
+| Workspace → Who approves what | `/app/workspace/requests` | owner/admin |
+| Workspace → Company settings (details, letterhead) | `/app/workspace/company` | owner/admin |
+| Workspace → Notification settings (email on/off, test email) | `/app/workspace/notifications` | owner/admin |
+| Workspace → Activity log | `/app/workspace/activity` | owner |
+| Workspace → Your data (download everything as a ZIP) | `/app/workspace/data` | owner |
+| Workspace → Help & support (message us, let support in for a limited time) | `/app/workspace/support` | signed in |
+| A tool's settings | `/app/workspace/tools/leave` (also `employees`, `attendance`, `payroll`, `claims`, `performance`) | signed in with rights to that tool |
+| Accept an invitation | `/invite/…` | the invitation link |
 | Setup check | `/setup` | nothing |
 | Privacy / Terms | `/privacy`, `/terms` | nothing |
 
-While email sending isn't set up, invitation emails are printed in the terminal where `npm run dev` is running, and the wizard shows a **Copy link** button so you can send invites by WhatsApp.
+Old addresses redirect automatically (for example `/app/settings/modules` → `/app/workspace/tools`, `/portal` → `/staff`, `/features` → `/product`). The list is in `next.config.ts`.
+
+While email sending isn't set up, invitation emails are printed in the terminal where `npm run dev` is running, and setup shows a **Copy link** button so you can send invites by WhatsApp.
 
 ## Design & fonts
 
@@ -134,7 +165,8 @@ While email sending isn't set up, invitation emails are printed in the terminal 
 | `SUPABASE_SECRET_KEY` | Always | Server-only master key, used for emails, reminders and the public careers form. **Never share it.** |
 | `DATABASE_URL` | For `npm run db:migrate` | Direct database connection used to install/update tables |
 | `NEXT_PUBLIC_SITE_URL` | When deployed | Your public web address (for links in emails), e.g. `https://app.yourbrand.com` |
-| `RESEND_API_KEY` | From Phase 3 | Sends app emails (notifications, payslips) |
+| `RESEND_API_KEY` | For real emails | Sends app emails (notifications, letters ready, payslips). Without it, emails are printed in the terminal on your computer |
+| `CRON_SECRET` | Optional, on Vercel | Any long random text. Lets Vercel run the daily catch-up that emails any notifications that didn't go out straight away (see `vercel.json`) |
 
 On Vercel you'll enter the same names and values under **Project → Settings → Environment Variables** (Phase 10 walks you through it).
 
@@ -173,7 +205,7 @@ tests/                      ← automated tests (run with npm test)
 scripts/db-migrate.mjs      ← installs database changes
 ```
 
-### How data is kept separate between businesses
+### How each company space is kept separate
 
 - Every table that holds business data has a `business_id`. Postgres **Row Level Security** checks every single read and write, so one business can never see another's data, even through a guessed URL or a direct API call.
 - Links between records carry the `business_id` too, so a record can't point at another business's data. A record can never be moved to another business.
@@ -184,21 +216,23 @@ scripts/db-migrate.mjs      ← installs database changes
 
 ### Backups
 
-Supabase backs up the database automatically every day (7 days kept on the Pro plan; the Free plan has limited backups, so upgrade to Pro before going live). A download-your-data export for business owners is part of Phase 3.
+Supabase backs up the database automatically every day (7 days kept on the Pro plan; the Free plan has limited backups, so upgrade to Pro before going live). Owners can also download all their company's data at any time from Workspace → Your data.
 
 ---
 
-## Adding a new module later
+## Adding a new tool later
 
 1. **Name it.** Add its key to `ModuleKey` in [`src/modules/types.ts`](src/modules/types.ts).
-2. **Describe it.** Add an entry to `MODULES` in [`src/modules/registry.ts`](src/modules/registry.ts): name, category, features, who it's for, `requires` (must-have modules) and `recommends`, its permission `resources`, sidebar `nav` items, staff `portal` items, dashboard `widgets`, `notifications`, optional `setup` step and `checklist` items.
-3. **Price it.** Add a line under `pricing.modules` in [`src/config/app.config.ts`](src/config/app.config.ts).
-4. **Store its data.** Create a new file in `supabase/migrations/` (name it with a later date, e.g. `20270101000001_my_module.sql`). Give every table a `business_id` column and `unique (business_id, id)`, link to other tables with `(business_id, x_id)` foreign keys, then add security rules with one line per table:
+2. **Describe it.** Add an entry to `MODULES` in [`src/modules/registry.ts`](src/modules/registry.ts): the name people see, its stage (`hire`, `run`, `pay`, `grow`), a one-line tagline, 3–4 short points, 4–6 outcomes for the product page, `requires` and `recommends`, permission `resources`, sidebar `nav`, staff app `portal` items, Home `widgets` (with a section: attention, today or month), `notifications`, optional `setup` and `checklist` items.
+3. **Price it.** Add a line under `pricing.tools` in [`src/config/app.config.ts`](src/config/app.config.ts).
+4. **Suggest it in setup (optional).** Add a question or a rule in [`src/modules/setup-questions.ts`](src/modules/setup-questions.ts).
+5. **Store its data.** Create a new file in `supabase/migrations/` (with a later date). Give every table a `business_id` column and `unique (business_id, id)`, link to other tables with `(business_id, x_id)` foreign keys, then add security rules with one line per table:
    ```sql
-   call private.std_rls('my_table', 'my_resource', 'employee_id');  -- or null if not about one employee
+   call private.std_rls('my_table', 'my_resource', 'employee_id');  -- or null if not about one person
    call private.finalize_tenant_tables();                            -- always last
    ```
-5. **Give roles access.** Add the new resource to the default roles in [`src/modules/roles.ts`](src/modules/roles.ts) if needed.
-6. Run `npm run db:migrate` and `npm test`.
+   Also add the key to `private.module_catalog` in the migration.
+6. **Give roles access** in [`src/modules/roles.ts`](src/modules/roles.ts), and add its pages to [`src/modules/routes.ts`](src/modules/routes.ts) once they exist.
+7. Run `npm run db:migrate` and `npm test`.
 
-The wizard, Settings → Modules, sidebar, dashboard, portal, notification settings and permission matrix all pick up the new module automatically.
+Setup, Workspace → Tools, the sidebar, Jump to, Home, the staff app, notifications, pricing and the permission grid all pick up the new tool automatically.

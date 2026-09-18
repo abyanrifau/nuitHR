@@ -8,11 +8,10 @@ import type { ModuleKey } from "@/modules/types";
 
 export const WIZARD_STEPS = [
   { n: 1, key: "account", label: "Account", href: "/signup" },
-  { n: 2, key: "business", label: "Business", href: "/onboarding/business" },
-  { n: 3, key: "modules", label: "Modules", href: "/onboarding/modules" },
-  { n: 4, key: "setup", label: "Quick setup", href: "/onboarding/setup" },
-  { n: 5, key: "team", label: "Team", href: "/onboarding/team" },
-  { n: 6, key: "done", label: "Done", href: "/onboarding/done" },
+  { n: 2, key: "company", label: "Your company", href: "/onboarding/company" },
+  { n: 3, key: "questions", label: "How you work", href: "/onboarding/questions" },
+  { n: 4, key: "tools", label: "Your tools", href: "/onboarding/tools" },
+  { n: 5, key: "invite", label: "Invite people", href: "/onboarding/invite" },
 ] as const;
 
 export type WizardStepKey = (typeof WIZARD_STEPS)[number]["key"];
@@ -22,6 +21,8 @@ export interface DraftData {
   furthest?: number;
   /** Setup screens the user chose to skip. */
   skipped?: string[];
+  /** Answers to "Tell us how you work". */
+  answers?: Record<string, string>;
 }
 
 export interface OnboardingState {
@@ -51,7 +52,7 @@ export interface OnboardingState {
 }
 
 /**
- * Everything the wizard needs: which business is being set up, how far the
+ * Everything setup needs: which business is being set up, how far the
  * user got, and what they've already filled in. Progress is saved in the
  * database, so they can close the browser and carry on later.
  */
@@ -100,15 +101,15 @@ export const getOnboardingState = cache(async (): Promise<OnboardingState> => {
   };
 });
 
-/** Setup screens to show, in order: only for modules that are switched on. */
+/** Tools with a settings screen, in order: only those switched on. */
 export function setupModulesFor(modules: ModuleKey[]): ModuleKey[] {
   return SETUP_ORDER.filter((m) => modules.includes(m));
 }
 
-/** Pages after step 2 need a business; send people back if there isn't one yet. */
+/** Screens after "Your company" need a company; send people back if there isn't one yet. */
 export async function requireOnboardingBusiness() {
   const state = await getOnboardingState();
-  if (!state.businessId || !state.business) redirect("/onboarding/business");
+  if (!state.businessId || !state.business) redirect("/onboarding/company");
   return state as OnboardingState & { businessId: string; business: NonNullable<OnboardingState["business"]> };
 }
 
@@ -120,7 +121,7 @@ export async function saveDraft(userId: string, patch: { business_id?: string | 
   const data: DraftData = { ...prev, ...patch.data, furthest: Math.max(prev.furthest ?? 2, step, patch.data?.furthest ?? 0) };
   const { error } = await supabase.from("onboarding_drafts").upsert({
     user_id: userId,
-    business_id: patch.business_id === undefined ? (existing?.completed_at ? null : existing?.business_id ?? null) : patch.business_id,
+    business_id: patch.business_id === undefined ? (existing?.completed_at ? null : (existing?.business_id ?? null)) : patch.business_id,
     current_step: step,
     data,
     completed_at: patch.completed ? new Date().toISOString() : null,

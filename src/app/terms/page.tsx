@@ -15,8 +15,8 @@ export default function TermsPage() {
       <p>Keep your sign-in details private. You are responsible for activity under your account and for the people you invite.</p>
       <h2>Free trial and billing</h2>
       <p>
-        New businesses get a {appConfig.trial.days}-day free trial. After that, fees are based on the modules you choose and your number of employees,
-        as shown on the pricing page.
+        New businesses get a {appConfig.trial.days}-day free trial. After that, fees are based on the tools you switch on and the number of people on
+        your staff, as shown on the pricing page.
       </p>
       <h2>Your data</h2>
       <p>You own the data you put into {name}. You can export it at any time from Settings.</p>

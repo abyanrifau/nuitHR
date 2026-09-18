@@ -1,9 +1,34 @@
 /**
- * Admin pages that exist so far. Checklist items and menu links only
- * become clickable once their page is built, so nobody lands on a
+ * Admin pages that exist so far. Sidebar links, "Jump to" and checklist
+ * items only appear/link once their page is built, so nobody lands on a
  * "page not found". Each build phase adds its pages here.
  */
-export const AVAILABLE_ROUTES = new Set<string>(["/app", "/app/settings/modules"]);
+export const AVAILABLE_ROUTES = new Set<string>([
+  "/app",
+  "/app/requests",
+  "/app/people",
+  "/app/people/new",
+  "/app/people/org-chart",
+  "/app/letters",
+  "/app/news",
+  "/app/notifications",
+  "/app/account",
+  "/app/workspace/tools",
+  "/app/workspace/people",
+  "/app/workspace/requests",
+  "/app/workspace/company",
+  "/app/workspace/notifications",
+  "/app/workspace/activity",
+  "/app/workspace/data",
+  "/app/workspace/support",
+  "/app/workspace/tools/employees",
+  "/app/workspace/tools/leave",
+  "/app/workspace/tools/attendance",
+  "/app/workspace/tools/payroll",
+  "/app/workspace/tools/claims",
+  "/app/workspace/tools/performance",
+  "/help",
+]);
 
 export function isRouteAvailable(href: string): boolean {
   return AVAILABLE_ROUTES.has(href.split("?")[0]);

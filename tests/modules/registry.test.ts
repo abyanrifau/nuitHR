@@ -1,75 +1,71 @@
 import { describe, expect, it } from "vitest";
-import { CORE_MODULE_KEYS, MODULES, allResources } from "@/modules/registry";
-import {
-  applyBundle,
-  BUNDLES,
-  dependentsOf,
-  disableModule,
-  enableModule,
-  normalizeSelection,
-  previewDisable,
-  recommendationsFor,
-} from "@/modules/selection";
+import { CORE_MODULE_KEYS, FOUNDATION_TOOLS, MODULES, TOOL_STAGES, allResources, toolsInStage } from "@/modules/registry";
+import { dependentsOf, disableModule, enableModule, normalizeSelection, previewDisable, recommendationsFor } from "@/modules/selection";
 import { estimateMonthlyPrice } from "@/modules/pricing";
 import { DEFAULT_ROLES } from "@/modules/roles";
-import { adminNavigation, moduleForPath, portalNavigation, type AccessContext } from "@/modules/access";
+import { adminNavigation, moduleForPath, portalNavigation, portalTabs, type AccessContext } from "@/modules/access";
+import { isComplete, recommendTools, selectionFromAnswers, SETUP_QUESTIONS } from "@/modules/setup-questions";
 import { appConfig } from "@/config/app.config";
 
-describe("module registry", () => {
-  it("has unique module keys and resource keys", () => {
+describe("tool registry", () => {
+  it("has unique keys and resource keys", () => {
     const keys = MODULES.map((m) => m.key);
     expect(new Set(keys).size).toBe(keys.length);
     const res = allResources().map((r) => r.key);
     expect(new Set(res).size).toBe(res.length);
   });
 
-  it("only references modules that exist", () => {
-    const keys = new Set(MODULES.map((m) => m.key));
-    for (const m of MODULES) {
-      for (const dep of [...m.requires, ...m.recommends]) expect(keys.has(dep)).toBe(true);
-    }
+  it("uses the new lineup: foundation plus hire, run, pay and grow", () => {
+    expect(FOUNDATION_TOOLS.map((m) => m.name)).toEqual(["People directory", "Requests", "Letters & files", "Access & roles", "Staff app"]);
+    expect(toolsInStage("hire").map((m) => m.name)).toEqual(["Hiring", "Joiners & leavers"]);
+    expect(toolsInStage("run").map((m) => m.name)).toEqual(["Time & shifts", "Time off", "Permits & renewals"]);
+    expect(toolsInStage("pay").map((m) => m.name)).toEqual(["Payroll", "Claims"]);
+    expect(toolsInStage("grow").map((m) => m.name)).toEqual(["Training", "Reviews & goals"]);
+    expect(TOOL_STAGES.map((s) => s.label)).toEqual(["Hire", "Run", "Pay", "Grow"]);
   });
 
-  it("has no dependency cycles", () => {
+  it("only references tools that exist, with no dependency cycles", () => {
+    const keys = new Set(MODULES.map((m) => m.key));
     const visit = (key: string, path: string[]) => {
       expect(path).not.toContain(key);
       for (const dep of MODULES.find((m) => m.key === key)!.requires) visit(dep, [...path, key]);
     };
-    for (const m of MODULES) visit(m.key, []);
-  });
-
-  it("gives every optional module a price and every core module the core price", () => {
-    for (const m of MODULES.filter((x) => !x.core)) {
-      expect(appConfig.pricing.modules).toHaveProperty(m.key);
+    for (const m of MODULES) {
+      for (const dep of [...m.requires, ...m.recommends]) expect(keys.has(dep)).toBe(true);
+      visit(m.key, []);
     }
   });
 
-  it("gives module cards 3-4 features", () => {
-    for (const m of MODULES) {
+  it("prices every add-on tool", () => {
+    for (const m of MODULES.filter((x) => !x.core)) expect(appConfig.pricing.tools).toHaveProperty(m.key);
+  });
+
+  it("gives every listed tool a tagline, 3-4 short points and 4-6 outcomes", () => {
+    for (const m of MODULES.filter((x) => !x.builtIn)) {
       expect(m.features.length).toBeGreaterThanOrEqual(3);
       expect(m.features.length).toBeLessThanOrEqual(4);
+      expect(m.outcomes.length).toBeGreaterThanOrEqual(4);
+      expect(m.outcomes.length).toBeLessThanOrEqual(6);
     }
   });
 });
 
-describe("module selection rules", () => {
-  it("auto-enables Payroll when Transport Allowance is turned on, with a friendly note", () => {
-    const r = enableModule(CORE_MODULE_KEYS, "transport");
-    expect(r.selected).toContain("payroll");
-    expect(r.autoEnabled).toHaveLength(1);
-    expect(r.autoEnabled[0].message).toMatch(/Transport allowance claims needs Payroll.*turned Payroll on too/);
-  });
-
-  it("warns that turning off Payroll also turns off Transport Allowance", () => {
-    const selected = normalizeSelection(["payroll", "transport", "leave"]);
-    expect(previewDisable(selected, "payroll")).toEqual({ allowed: true, alsoDisabled: ["transport"] });
-    const r = disableModule(selected, "payroll");
+describe("tool selection rules", () => {
+  it("lets Claims work without Payroll", () => {
+    const r = enableModule(CORE_MODULE_KEYS, "claims");
+    expect(r.selected).toContain("claims");
     expect(r.selected).not.toContain("payroll");
-    expect(r.selected).not.toContain("transport");
-    expect(r.selected).toContain("leave");
+    expect(r.autoEnabled).toEqual([]);
+    expect(previewDisable(normalizeSelection(["payroll", "claims"]), "payroll")).toEqual({ allowed: true, alsoDisabled: [] });
   });
 
-  it("never allows core modules to be turned off", () => {
+  it("maps the old transport and expense keys to Claims", () => {
+    expect(normalizeSelection(["transport"])).toContain("claims");
+    expect(normalizeSelection(["expenses"])).toContain("claims");
+    expect(normalizeSelection(["transport"])).not.toContain("transport");
+  });
+
+  it("never allows foundation tools to be switched off", () => {
     const selected = normalizeSelection([]);
     for (const key of CORE_MODULE_KEYS) {
       expect(previewDisable(selected, key).allowed).toBe(false);
@@ -77,53 +73,79 @@ describe("module selection rules", () => {
     }
   });
 
-  it("always includes core modules and requirements, and drops unknown keys", () => {
-    const sel = normalizeSelection(["transport", "not-a-module"]);
-    for (const key of CORE_MODULE_KEYS) expect(sel).toContain(key);
-    expect(sel).toContain("payroll");
-    expect(sel).not.toContain("not-a-module");
-  });
-
-  it("dependentsOf only lists enabled modules", () => {
+  it("drops unknown keys and lists dependents only when enabled", () => {
+    expect(normalizeSelection(["not-a-tool"])).not.toContain("not-a-tool");
     expect(dependentsOf("payroll", normalizeSelection(["payroll"]))).toEqual([]);
   });
 
-  it("builds every industry bundle from the spec", () => {
-    const expected: Record<string, string[]> = {
-      hospitality: ["attendance", "leave", "payroll", "transport", "compliance", "onboarding"],
-      restaurant: ["attendance", "leave", "payroll", "compliance"],
-      retail: ["attendance", "leave", "payroll"],
-      office: ["leave", "payroll", "recruitment", "performance", "learning"],
-      construction: ["attendance", "leave", "payroll", "compliance", "expenses"],
-      basics: [],
-    };
-    for (const b of BUNDLES) {
-      const sel = applyBundle(b.key).selected;
-      const optional = sel.filter((k) => !CORE_MODULE_KEYS.includes(k));
-      expect(optional.sort()).toEqual(expected[b.key].sort());
-    }
-  });
-
-  it("recommends Attendance and Leave alongside Payroll without forcing them", () => {
+  it("recommends time, time off and claims alongside payroll without forcing them", () => {
     const sel = normalizeSelection(["payroll"]);
     expect(sel).not.toContain("attendance");
-    expect(recommendationsFor(sel).map((r) => r.module)).toEqual(expect.arrayContaining(["attendance", "leave"]));
+    expect(recommendationsFor(sel).map((r) => r.module)).toEqual(expect.arrayContaining(["attendance", "leave", "claims"]));
+  });
+});
+
+describe("setup questions", () => {
+  it("has 6 to 8 questions", () => {
+    expect(SETUP_QUESTIONS.length).toBeGreaterThanOrEqual(6);
+    expect(SETUP_QUESTIONS.length).toBeLessThanOrEqual(8);
+  });
+
+  it("recommends tools from answers, each with a reason", () => {
+    const answers = {
+      work_pattern: "shifts",
+      track_leave: "yes",
+      payroll: "here",
+      reimburse: "yes",
+      permits: "yes",
+      hiring: "no",
+      starters: "yes",
+      develop: "neither",
+    };
+    expect(isComplete(answers)).toBe(true);
+    const recs = recommendTools(answers);
+    expect(recs.map((r) => r.key).sort()).toEqual(["attendance", "claims", "compliance", "leave", "onboarding", "payroll"]);
+    expect(recs.find((r) => r.key === "attendance")!.reason).toBe("Because your staff work shifts");
+  });
+
+  it("suggests only the foundation when nothing else fits", () => {
+    const none = {
+      work_pattern: "fixed",
+      track_leave: "no",
+      payroll: "elsewhere",
+      reimburse: "no",
+      permits: "no",
+      hiring: "no",
+      starters: "no",
+      develop: "neither",
+    };
+    expect(recommendTools(none)).toEqual([]);
+    expect(selectionFromAnswers(none)).toEqual(normalizeSelection([]));
+  });
+
+  it("covers hiring, training and reviews", () => {
+    const keys = recommendTools({ hiring: "yes", develop: "both" }).map((r) => r.key);
+    expect(keys).toEqual(expect.arrayContaining(["recruitment", "onboarding", "learning", "performance"]));
   });
 });
 
 describe("pricing", () => {
-  it("adds base + per-employee for core and each selected module", () => {
-    const p = appConfig.pricing.modules;
+  it("charges the foundation base fee plus each add-on", () => {
+    const { foundation, tools } = appConfig.pricing;
     const est = estimateMonthlyPrice(normalizeSelection(["leave", "payroll"]), 20);
-    expect(est.lines.map((l) => l.key)).toEqual(["core", "leave", "payroll"]);
+    expect(est.lines.map((l) => l.key)).toEqual(["foundation", "leave", "payroll"]);
     expect(est.monthlyTotal).toBe(
-      p.core.base + p.core.perEmployee * 20 + p.leave.base + p.leave.perEmployee * 20 + p.payroll.base + p.payroll.perEmployee * 20,
+      foundation.base + foundation.perPerson * 20 + tools.leave.base + tools.leave.perPerson * 20 + tools.payroll.base + tools.payroll.perPerson * 20,
     );
   });
 
-  it("treats invalid employee counts as 1", () => {
-    expect(estimateMonthlyPrice([], Number.NaN).employees).toBe(1);
-    expect(estimateMonthlyPrice([], -5).employees).toBe(1);
+  it("treats invalid headcounts as 1", () => {
+    expect(estimateMonthlyPrice([], Number.NaN).people).toBe(1);
+    expect(estimateMonthlyPrice([], -5).people).toBe(1);
+  });
+
+  it("has a 30-day trial by default", () => {
+    expect(appConfig.trial.days).toBe(30);
   });
 });
 
@@ -131,62 +153,80 @@ describe("default roles", () => {
   const resources = new Map(allResources().map((r) => [r.key, r]));
 
   it("only grants actions that exist on each resource", () => {
-    for (const role of DEFAULT_ROLES) {
-      for (const p of role.permissions) {
-        expect(resources.get(p.resource)?.actions).toContain(p.action);
-      }
-    }
+    for (const role of DEFAULT_ROLES) for (const p of role.permissions) expect(resources.get(p.resource)?.actions).toContain(p.action);
   });
 
-  it("keeps salary and payroll data away from Admin, HR Manager and Managers (except their own)", () => {
+  it("keeps salary and payroll away from Admin, HR Manager and Managers (except their own)", () => {
     for (const key of ["admin", "hr_manager", "manager", "employee"]) {
       const role = DEFAULT_ROLES.find((r) => r.key === key)!;
       const salary = role.permissions.filter((p) => ["compensation", "payroll", "payslips"].includes(p.resource));
       for (const p of salary) expect(p.scope).toBe("own");
       expect(salary.some((p) => p.resource === "payroll")).toBe(false);
     }
-    const payroll = DEFAULT_ROLES.find((r) => r.key === "payroll_officer")!;
-    expect(payroll.permissions).toContainEqual({ resource: "compensation", action: "view", scope: "all" });
   });
 
-  it("limits managers to their team", () => {
-    const mgr = DEFAULT_ROLES.find((r) => r.key === "manager")!;
-    expect(mgr.permissions.every((p) => p.scope !== "all")).toBe(true);
+  it("gives staff claims for themselves and managers claims for their team", () => {
+    expect(DEFAULT_ROLES.find((r) => r.key === "employee")!.permissions).toContainEqual({ resource: "claims", action: "create", scope: "own" });
+    expect(DEFAULT_ROLES.find((r) => r.key === "manager")!.permissions).toContainEqual({ resource: "claims", action: "approve", scope: "team" });
+    expect(DEFAULT_ROLES.find((r) => r.key === "manager")!.permissions.every((p) => p.scope !== "all")).toBe(true);
   });
 });
 
-describe("navigation adapts to enabled modules", () => {
-  const owner = (modules: string[]): AccessContext => ({
-    isOwner: true,
-    modules: normalizeSelection(modules),
-    permissions: [],
+describe("navigation adapts to switched-on tools", () => {
+  const owner = (modules: string[]): AccessContext => ({ isOwner: true, modules: normalizeSelection(modules), permissions: [] });
+  const hrefs = (ctx: AccessContext) => adminNavigation(ctx).flatMap((s) => s.items.map((i) => i.href));
+
+  it("orders the sidebar Home, Requests, stages, then Workspace", () => {
+    const sections = adminNavigation(owner(["attendance", "payroll"]));
+    expect(sections.map((s) => s.key)).toEqual(["home", "run", "pay", "workspace"]);
+    expect(sections[0].items.slice(0, 2).map((i) => i.label)).toEqual(["Home", "Requests"]);
+    expect(sections.at(-1)!.items.map((i) => i.label)).toContain("Tools");
   });
 
-  it("hides disabled modules from the sidebar and portal", () => {
-    const hrefs = adminNavigation(owner([])).flatMap((g) => g.items.map((i) => i.href));
-    expect(hrefs).toContain("/app/employees");
-    expect(hrefs).not.toContain("/app/payroll");
-    const withPayroll = adminNavigation(owner(["payroll"])).flatMap((g) => g.items.map((i) => i.href));
-    expect(withPayroll).toContain("/app/payroll");
-    expect(portalNavigation(owner([])).map((p) => p.href)).not.toContain("/portal/clock");
-    expect(portalNavigation(owner(["attendance"])).map((p) => p.href)).toContain("/portal/clock");
+  it("hides switched-off tools from the sidebar and staff app", () => {
+    expect(hrefs(owner([]))).not.toContain("/app/payroll");
+    expect(hrefs(owner(["payroll"]))).toContain("/app/payroll");
+    expect(portalNavigation(owner([])).map((p) => p.href)).not.toContain("/staff/time");
+    expect(portalNavigation(owner(["attendance"])).map((p) => p.href)).toContain("/staff/time");
   });
 
-  it("hides items the user has no permission for", () => {
+  it("gives the staff app its five tabs in order when everything is on", () => {
+    expect(portalTabs(owner(["attendance", "payroll", "leave", "claims"])).map((t) => t.label)).toEqual(["Home", "Time", "Requests", "Pay", "Me"]);
+  });
+
+  it("can limit the sidebar to pages that exist", () => {
+    expect(adminNavigation(owner(["payroll"]), { onlyBuilt: true }).flatMap((s) => s.items.map((i) => i.href))).toEqual([
+      "/app",
+      "/app/requests",
+      "/app/people",
+      "/app/people/org-chart",
+      "/app/letters",
+      "/app/news",
+      "/app/workspace/tools",
+      "/app/workspace/people",
+      "/app/workspace/requests",
+      "/app/workspace/company",
+      "/app/workspace/notifications",
+      "/app/workspace/activity",
+      "/app/workspace/data",
+      "/app/workspace/support",
+    ]);
+  });
+
+  it("hides items the person isn't allowed to see", () => {
     const staff: AccessContext = {
       isOwner: false,
       modules: normalizeSelection(["payroll", "leave"]),
       permissions: DEFAULT_ROLES.find((r) => r.key === "employee")!.permissions,
     };
-    const hrefs = adminNavigation(staff).flatMap((g) => g.items.map((i) => i.href));
-    expect(hrefs).not.toContain("/app/payroll");
-    expect(portalNavigation(staff).map((p) => p.href)).toEqual(expect.arrayContaining(["/portal/payslips", "/portal/leave"]));
+    expect(hrefs(staff)).not.toContain("/app/payroll");
+    expect(portalNavigation(staff).map((p) => p.href)).toEqual(expect.arrayContaining(["/staff/pay", "/staff/requests"]));
   });
 
-  it("maps URLs to their module", () => {
-    expect(moduleForPath("/app/attendance/roster")?.key).toBe("attendance");
+  it("maps URLs to their tool", () => {
+    expect(moduleForPath("/app/time/roster")?.key).toBe("attendance");
     expect(moduleForPath("/app/payroll/runs/123")?.key).toBe("payroll");
-    expect(moduleForPath("/portal/claims")?.key).toBe("transport");
+    expect(moduleForPath("/staff/requests/claim")?.key).toBe("claims");
     expect(moduleForPath("/app")).toBeUndefined();
   });
 });

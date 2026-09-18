@@ -9,8 +9,22 @@ const ctx = { branches: ["Malé Office", "Resort Island"], existingCodes: ["E000
 describe("CSV", () => {
   it("handles quotes, commas, line breaks and Excel's BOM", () => {
     const rows = parseCsv('﻿a,b\r\n"x, y","say ""hi"""\n"multi\nline",z\n\n');
-    expect(rows).toEqual([["a", "b"], ["x, y", 'say "hi"'], ["multi\nline", "z"]]);
-    expect(parseCsv(toCsv([["x, y", 'q"'], ["1", ""]]))).toEqual([["x, y", 'q"'], ["1", ""]]);
+    expect(rows).toEqual([
+      ["a", "b"],
+      ["x, y", 'say "hi"'],
+      ["multi\nline", "z"],
+    ]);
+    expect(
+      parseCsv(
+        toCsv([
+          ["x, y", 'q"'],
+          ["1", ""],
+        ]),
+      ),
+    ).toEqual([
+      ["x, y", 'q"'],
+      ["1", ""],
+    ]);
   });
 });
 
@@ -36,7 +50,7 @@ describe("employee import preview", () => {
 
   it("gives a clear message for each problem, with the spreadsheet row number", () => {
     const csv = [
-      "Employee ID,First name,Email,Branch,Join date,Gender,Nationality,Contract type,Manager's employee ID",
+      "Employee ID,First name,Email,Location,Join date,Gender,Nationality,Contract type,Manager's employee ID",
       "E0001,Ali,ali@x.mv,Malé Office,01/01/2025,m,MV,permanent,",
       "X1,,bad-email,Atlantis,32/01/2025,robot,Narnia,forever,NOPE",
       "X2,Sara,taken@x.mv,resort island,01/01/2025,f,maldivian,Part time,X2",
@@ -47,7 +61,7 @@ describe("employee import preview", () => {
     expect(errs(2)).toMatch(/Employee ID "E0001" is already used/);
     expect(errs(3)).toMatch(/First name is missing/);
     expect(errs(3)).toMatch(/isn't a valid email/);
-    expect(errs(3)).toMatch(/Branch "Atlantis" doesn't exist/);
+    expect(errs(3)).toMatch(/Location "Atlantis" doesn't exist/);
     expect(errs(3)).toMatch(/isn't a date/);
     expect(errs(3)).toMatch(/Gender "robot"/);
     expect(errs(3)).toMatch(/Nationality "Narnia"/);

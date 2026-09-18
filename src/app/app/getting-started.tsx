@@ -11,7 +11,7 @@ export interface ChecklistGroup {
   items: { key: string; label: string; href: string; done: boolean }[];
 }
 
-/** Dashboard widget that tracks what's left to set up, per enabled module. */
+/** Home: what is left to set up, per switched-on tool. */
 export function GettingStarted({ groups }: { groups: ChecklistGroup[] }) {
   const all = groups.flatMap((g) => g.items);
   const doneCount = all.filter((i) => i.done).length;
@@ -21,12 +21,12 @@ export function GettingStarted({ groups }: { groups: ChecklistGroup[] }) {
     <Card>
       <CardHeader>
         <div className="flex items-baseline justify-between gap-3">
-          <CardTitle>Getting started</CardTitle>
+          <CardTitle>Setup checklist</CardTitle>
           <span className="text-sm text-muted-foreground tabular">
             {doneCount} of {all.length} done
           </span>
         </div>
-        <CardDescription>A few things to set up so everything runs smoothly.</CardDescription>
+        <CardDescription>Things left to set up, by tool.</CardDescription>
         <div
           className="mt-4 h-px overflow-hidden bg-border"
           role="progressbar"

@@ -2,56 +2,57 @@ import { appConfig } from "@/config/app.config";
 import { MODULE_MAP } from "./registry";
 import type { ModuleKey } from "./types";
 
-type PriceKey = keyof typeof appConfig.pricing.modules;
+type ToolPriceKey = keyof typeof appConfig.pricing.tools;
 
 export interface PriceLine {
-  key: PriceKey;
+  key: "foundation" | ToolPriceKey;
   label: string;
   base: number;
-  perEmployee: number;
+  perPerson: number;
   total: number;
 }
 
 export interface PriceEstimate {
   currency: string;
-  employees: number;
+  people: number;
   lines: PriceLine[];
   monthlyTotal: number;
 }
 
-/** Monthly estimate: core (always) + each selected module = base + perEmployee × employees. */
-export function estimateMonthlyPrice(selected: Iterable<ModuleKey>, employees: number): PriceEstimate {
-  const count = Math.max(1, Math.floor(Number.isFinite(employees) ? employees : 1));
-  const prices = appConfig.pricing.modules;
-  const keys = new Set<PriceKey>(["core"]);
+function clampPeople(n: number) {
+  return Math.max(1, Math.floor(Number.isFinite(n) ? n : 1));
+}
+
+/** Monthly estimate: foundation base fee + each selected add-on tool. */
+export function estimateMonthlyPrice(selected: Iterable<ModuleKey>, people: number): PriceEstimate {
+  const count = clampPeople(people);
+  const { foundation, tools } = appConfig.pricing;
+  const lines: PriceLine[] = [
+    {
+      key: "foundation",
+      label: "Foundation",
+      base: foundation.base,
+      perPerson: foundation.perPerson,
+      total: foundation.base + foundation.perPerson * count,
+    },
+  ];
+  const seen = new Set<string>();
   for (const k of selected) {
-    if (!MODULE_MAP[k]?.core && k in prices) keys.add(k as PriceKey);
+    if (seen.has(k) || MODULE_MAP[k]?.core || !(k in tools)) continue;
+    seen.add(k);
+    const p = tools[k as ToolPriceKey];
+    lines.push({ key: k as ToolPriceKey, label: MODULE_MAP[k].name, base: p.base, perPerson: p.perPerson, total: p.base + p.perPerson * count });
   }
-  const lines: PriceLine[] = [...keys].map((key) => {
-    const p = prices[key];
-    return {
-      key,
-      label: key === "core" ? "Core platform (always included)" : MODULE_MAP[key as ModuleKey].name,
-      base: p.base,
-      perEmployee: p.perEmployee,
-      total: p.base + p.perEmployee * count,
-    };
-  });
-  return {
-    currency: appConfig.pricing.currency,
-    employees: count,
-    lines,
-    monthlyTotal: lines.reduce((sum, l) => sum + l.total, 0),
-  };
+  return { currency: appConfig.pricing.currency, people: count, lines, monthlyTotal: lines.reduce((s, l) => s + l.total, 0) };
 }
 
-/** Lowest possible monthly price for a module (used for "from X/month"). */
-export function startingPrice(key: ModuleKey | "core"): number {
-  const p = appConfig.pricing.modules[(MODULE_MAP[key as ModuleKey]?.core ? "core" : key) as PriceKey];
-  return p ? p.base + p.perEmployee : 0;
+/** Price of one add-on tool for a given headcount. */
+export function toolPrice(key: ModuleKey, people: number): number {
+  const p = appConfig.pricing.tools[key as ToolPriceKey];
+  return p ? p.base + p.perPerson * clampPeople(people) : 0;
 }
 
-/** Turns the employee-count ranges from the wizard into a number for estimates. */
+/** Turns the "number of staff" ranges from setup into a number for estimates. */
 export function employeeCountFromRange(range: string | null | undefined): number {
   switch (range) {
     case "1-10":

@@ -1,26 +1,35 @@
-export type ModuleCategory = "core" | "workforce" | "hiring" | "pay" | "development";
+/**
+ * "Tools" in the product. Internally they are still called modules and
+ * keep their original keys (so existing data and settings stay put);
+ * only the names people see changed.
+ */
+
+/** foundation = always included; hire / run / pay / grow = the four stages. */
+export type ToolStage = "foundation" | "hire" | "run" | "pay" | "grow";
+/** @deprecated kept as an alias while older code is updated */
+export type ModuleCategory = ToolStage;
 
 export type ModuleKey =
-  // core (always on)
-  | "employees"
-  | "approvals"
-  | "documents"
-  | "roles"
-  | "dashboard"
+  // foundation (always on)
+  | "employees" // People directory
+  | "approvals" // Requests
+  | "documents" // Letters & files
+  | "roles" // Access & roles
+  | "portal" // Staff app
+  // built-in features (always on, not listed as tools)
+  | "dashboard" // Home
   | "notifications"
-  | "portal"
-  | "system"
-  // selectable
-  | "attendance"
-  | "leave"
-  | "recruitment"
-  | "onboarding"
-  | "compliance"
-  | "payroll"
-  | "transport"
-  | "expenses"
-  | "learning"
-  | "performance";
+  | "system" // security, backups, data export, workspace settings
+  // selectable tools
+  | "recruitment" // Hiring
+  | "onboarding" // Joiners & leavers
+  | "attendance" // Time & shifts
+  | "leave" // Time off
+  | "compliance" // Permits & renewals
+  | "payroll" // Payroll
+  | "claims" // Claims (transport is a claim type)
+  | "learning" // Training
+  | "performance"; // Reviews & goals
 
 /** Permission actions, mirrored by the database check constraint on role_permissions.action. */
 export type PermissionAction = "view" | "create" | "edit" | "approve" | "delete" | "export";
@@ -59,7 +68,12 @@ export type IconName =
   | "book-open"
   | "message-square"
   | "home"
-  | "life-buoy";
+  | "life-buoy"
+  | "network"
+  | "user"
+  | "sliders"
+  | "download"
+  | "history";
 
 export interface ResourceDefinition {
   /** Resource key used in role_permissions.resource and in the database policies. */
@@ -68,7 +82,7 @@ export interface ResourceDefinition {
   description: string;
   /** Actions that make sense for this resource (shown as columns in the permission matrix). */
   actions: PermissionAction[];
-  /** true when records belong to one employee, so "team" and "own" scopes apply. */
+  /** true when records belong to one person, so "team" and "own" scopes apply. */
   employeeScoped: boolean;
   /** Sensitive resources can only be granted by the Owner (salary & payroll). */
   ownerGrantOnly?: boolean;
@@ -86,16 +100,20 @@ export interface PortalItem {
   label: string;
   href: string;
   icon: IconName;
-  /** Put on the bottom tab bar (max 4 + "More"). */
+  /** One of the staff app's bottom tabs (Home, Time, Requests, Pay, Me). */
   tab?: boolean;
-  /** Big button on the portal home screen. */
+  /** Big button on the staff app home screen. */
   homeAction?: boolean;
   requires?: { resource: string; action: PermissionAction };
 }
 
+export type WidgetSection = "attention" | "today" | "month";
+
 export interface WidgetDefinition {
   key: string;
   label: string;
+  /** Home is organised into: Needs your attention, Today, This month. */
+  section: WidgetSection;
   requires?: { resource: string; action: PermissionAction };
 }
 
@@ -114,19 +132,23 @@ export interface ChecklistItem {
 
 export interface ModuleDefinition {
   key: ModuleKey;
+  /** Name people see (e.g. "Time off"). */
   name: string;
-  category: ModuleCategory;
-  /** Core modules are always on and cannot be turned off. */
+  category: ToolStage;
+  /** Always on and can't be switched off. */
   core: boolean;
+  /** Built-in features (Home, notifications, security) that aren't listed as tools. */
+  builtIn?: boolean;
   icon: IconName;
-  /** One-line description for module cards. */
+  /** One plain-language line. */
   tagline: string;
-  /** 3–4 key features for module cards. */
+  /** 3–4 short points for the tool toggle cards. */
   features: string[];
-  whoFor: string;
-  /** Modules that MUST be on for this one to work (auto-enabled). */
+  /** 4–6 outcomes for the product page ("Know who's late before the shift starts"). */
+  outcomes: string[];
+  /** Tools that MUST be on for this one to work (auto-enabled). */
   requires: ModuleKey[];
-  /** Modules that work well together (suggested, never forced). */
+  /** Tools that work well together (suggested, never forced). */
   recommends: ModuleKey[];
   /** Friendly explanation shown when a requirement is auto-enabled. */
   requiresReason?: string;
@@ -135,10 +157,10 @@ export interface ModuleDefinition {
   portal: PortalItem[];
   widgets: WidgetDefinition[];
   notifications: NotificationEvent[];
-  /** Onboarding wizard step 4: quick setup screen for this module. */
+  /** Has a settings screen at Workspace → Tools → (tool). */
   setup?: { title: string; description: string };
-  /** Getting-started checklist entries shown on the dashboard. */
+  /** Setup checklist entries on Home. */
   checklist: ChecklistItem[];
-  /** Approval request types this module sends to the Approvals Inbox. */
+  /** Request types this tool sends to Requests. */
   approvalTypes: string[];
 }

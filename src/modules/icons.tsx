@@ -1,4 +1,6 @@
 import {
+  Download,
+  History,
   BadgeAlert,
   BarChart3,
   BookOpen,
@@ -29,6 +31,9 @@ import {
   Users,
   Wallet,
   Bell,
+  Network,
+  User,
+  SlidersHorizontal,
   type LucideIcon,
 } from "lucide-react";
 import type { IconName } from "./types";
@@ -64,6 +69,11 @@ const ICONS: Record<IconName, LucideIcon> = {
   "message-square": MessageSquare,
   home: Home,
   "life-buoy": LifeBuoy,
+  network: Network,
+  user: User,
+  sliders: SlidersHorizontal,
+  download: Download,
+  history: History,
 };
 
 export function ModuleIcon({ name, className }: { name: IconName; className?: string }) {

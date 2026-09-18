@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { appConfig } from "@/config/app.config";
 import { ThemeProvider } from "@/components/theme/theme-provider";
+import { Toaster } from "@/components/ui/toaster";
 import { siteUrl } from "@/lib/env";
 import "./globals.css";
 
@@ -22,7 +23,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" suppressHydrationWarning className="h-full">
       <body className="flex min-h-full flex-col">
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider>
+          {children}
+          <Toaster />
+        </ThemeProvider>
       </body>
     </html>
   );
