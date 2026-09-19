@@ -5,7 +5,7 @@ import { PageHeader } from "@/components/ui/page";
 import { ReviewForm } from "@/components/reviews/review-form";
 import { getStaffContext } from "@/lib/staff/context";
 import { formatDate } from "@/lib/format";
-import { loadReview } from "@/lib/reviews/load";
+import { loadMyReview } from "@/lib/reviews/load";
 import { AcknowledgeForm } from "./acknowledge";
 
 export const metadata: Metadata = { title: "My review" };
@@ -15,9 +15,10 @@ export default async function StaffReview(props: PageProps<"/staff/reviews/[id]"
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
   const { active, me, supabase } = await getStaffContext();
   if (!me) return <Alert tone="warning">Your login isn&apos;t linked to a staff profile yet. Ask HR to link it.</Alert>;
-  const data = await loadReview(supabase, id);
-  if (!data || data.review.employee_id !== me.id) notFound();
-  const { review: r, cycle, scale, questions, answers } = data;
+  const data = await loadMyReview(supabase, active.business_id, id);
+  if (!data) notFound();
+  const { review: r, scale, questions, answers } = data;
+  const cycle = { name: r.cycle_name, status: r.cycle_status, period_start: r.period_start, period_end: r.period_end, self_review_due: r.self_review_due };
   const shared = r.status === "shared" || r.status === "acknowledged";
   const editable = r.status === "self_review" && cycle.status === "open";
   const overall = r.overall_rating === null ? null : Number(r.overall_rating);
@@ -58,7 +59,7 @@ export default async function StaffReview(props: PageProps<"/staff/reviews/[id]"
       <ReviewForm
         reviewId={r.id}
         role="self"
-        questions={questions.self}
+        questions={questions}
         scale={scale}
         mine={answers.self}
         other={shared ? answers.manager : undefined}

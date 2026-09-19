@@ -28,6 +28,20 @@ const TYPES: Record<string, string> = {
   "image/png": "png",
 };
 
+/** The first bytes each kind of file really starts with, so a renamed file can't pass as a CV. */
+const SIGNATURES: Record<string, number[][]> = {
+  pdf: [[0x25, 0x50, 0x44, 0x46]],
+  doc: [[0xd0, 0xcf, 0x11, 0xe0]],
+  docx: [[0x50, 0x4b, 0x03, 0x04]],
+  jpg: [[0xff, 0xd8, 0xff]],
+  png: [[0x89, 0x50, 0x4e, 0x47]],
+};
+
+async function looksLike(file: File, ext: string): Promise<boolean> {
+  const head = new Uint8Array(await file.slice(0, 8).arrayBuffer());
+  return (SIGNATURES[ext] ?? []).some((sig) => sig.every((b, i) => head[i] === b));
+}
+
 /** Public job application. The CV is checked here and stored privately; only the hiring company can open it. */
 export async function apply(_: ApplyState, form: FormData): Promise<ApplyState> {
   if (String(form.get("website") ?? "")) return { done: true };
@@ -46,7 +60,7 @@ export async function apply(_: ApplyState, form: FormData): Promise<ApplyState> 
   if (cv instanceof File && cv.size > 0) {
     if (cv.size > 2 * 1024 * 1024) return { error: "The CV must be smaller than 2 MB." };
     const ext = TYPES[cv.type];
-    if (!ext) return { error: "Send your CV as a PDF, Word file or photo." };
+    if (!ext || !(await looksLike(cv, ext))) return { error: "Send your CV as a PDF, Word file or photo." };
     if (!isAdminConfigured()) return { error: "Uploading isn't available right now. Apply without a CV, or try later." };
     const admin = createAdminClient();
     const { data: v } = await admin.from("vacancies").select("business_id").eq("id", d.vacancy_id).single();

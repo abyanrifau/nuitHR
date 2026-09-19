@@ -33,9 +33,14 @@ export const getCareers = cache(async (slug: string): Promise<Careers | null> =>
   const c = data as Omit<Careers, "logoUrl">;
   let logoUrl: string | null = null;
   // The logo is private storage; a short-lived link is made just for this page.
+  // Only files in that company's own branding folder are ever signed here.
   if (c.business.logo_path && isAdminConfigured()) {
-    const { data: signed } = await createAdminClient().storage.from("tenant-files").createSignedUrl(c.business.logo_path, 3600);
-    logoUrl = signed?.signedUrl ?? null;
+    const admin = createAdminClient();
+    const { data: own } = await admin.from("businesses").select("id").eq("slug", slug).maybeSingle();
+    if (own && c.business.logo_path.startsWith(`${own.id}/branding/`)) {
+      const { data: signed } = await admin.storage.from("tenant-files").createSignedUrl(c.business.logo_path, 3600);
+      logoUrl = signed?.signedUrl ?? null;
+    }
   }
   return { ...c, logoUrl };
 });

@@ -30,7 +30,7 @@ People, time, pay and paperwork for multiple companies (each in its own sealed "
 | 7 | Hiring (roles, public careers page, candidate board, interviews, hire), Joiners & leavers (automatic checklists, staff tasks) and Permits & renewals (expiry tracking, daily reminders) | ✅ Done |
 | 8 | Training (courses, quizzes, certificates, paid training), Reviews & goals (review rounds, goals) and Surveys (anonymous, with results hidden for small groups) | ✅ Done |
 | 9 | Marketing website, pricing calculator, help centre | ✅ Structure and pages done early; content grows with each phase |
-| 10 | Demo data, security review, performance check, go live on Vercel | Next |
+| 10 | Sample company for demos, security review and fixes, speed check, link previews, go-live guide | ✅ Built. The go-live steps below need you |
 
 ---
 
@@ -95,7 +95,7 @@ In Supabase, go to **Authentication → URL Configuration**:
 2. Under **Redirect URLs**, click **Add URL** and enter `http://localhost:3000/**`
 3. Click **Save**.
 
-(When you go live on Vercel in Phase 10, you'll add your real web address here too.)
+(When you go live, you'll add your real web address here too. See **Going live** below.)
 
 ### Step 6: Start the app
 
@@ -105,7 +105,7 @@ npm run dev
 
 Open **http://localhost:3000/setup** in your browser. Every line should have a green tick. If one is red, it tells you what to fix. After changing `.env.local`, stop the app (press **Ctrl+C** in the terminal) and run `npm run dev` again.
 
-> **Emails during testing:** Supabase sends sign-up and password emails for you, but its built-in sender only allows **a few emails per hour** and is meant for testing. Before launch (Phase 10) we'll connect a proper email service (Resend) so there's no limit.
+> **Emails during testing:** Supabase sends sign-up and password emails for you, but its built-in sender only allows **a few emails per hour** and is meant for testing. Before launch you'll connect a proper email service (Resend) so there's no limit. See **Going live** below.
 
 ---
 
@@ -201,7 +201,8 @@ While email sending isn't set up, invitation emails are printed in the terminal 
 
 - **All colours, fonts, radius, spacing and the marketing colour blobs** are CSS variables in the "DESIGN TOKENS" block at the top of [`src/app/globals.css`](src/app/globals.css). Dark is the default; the `.light` block is the light theme.
 - **Blob colours** are `--blob-1` … `--blob-4` (placeholders). Blobs only appear on marketing pages, sign-in and the setup wizard, never inside the app.
-- **Fonts:** see [`public/fonts/README.txt`](public/fonts/README.txt) for the two files to add (Alte Haas Grotesk Bold, Helvetica Neue Light).
+- **Fonts:** `public/fonts` holds Alte Haas Grotesk Bold (freeware; its licence note must stay next to it) and Helvetica Neue Regular (`HelveticaNeue-Roman.otf`), which the link preview image's tagline uses. Helvetica Neue is a paid font: make sure you hold a licence for it.
+- **Link preview image** (what WhatsApp, iMessage and Discord show when someone shares a Harbor link) is drawn by `src/lib/og/harbor-card.tsx`. The soft colour background is `public/og/harbor-bg.png`, made by `node scripts/og-background.mjs`.
 - **Brand name** (the wordmark "Harbor.") comes from `brand.name` in the config file. The "by Nuit Works" credit comes from `brand.byline`.
 - **Links to Nuit Works** are all built by `nuitWorksUrl()` in `src/lib/brand.ts`. They open in a new tab and carry `utm_source=harbor&utm_medium=referral&utm_campaign=<where the link sits>` (hero, footer, login, app-sidebar, settings, staff-app, email). Change the address or parameters there once.
 
@@ -217,7 +218,7 @@ While email sending isn't set up, invitation emails are printed in the terminal 
 | `RESEND_API_KEY` | For real emails | Sends app emails (notifications, letters ready, payslips). Without it, emails are printed in the terminal on your computer |
 | `CRON_SECRET` | Optional, on Vercel | Any long random text. Lets Vercel run the daily catch-up that emails any notifications that didn't go out straight away (see `vercel.json`) |
 
-On Vercel you'll enter the same names and values under **Project → Settings → Environment Variables** (Phase 10 walks you through it).
+On Vercel you'll enter the same names and values under **Project → Settings → Environment Variables** (see **Going live** below).
 
 ---
 
@@ -230,6 +231,8 @@ On Vercel you'll enter the same names and values under **Project → Settings �
 | `npm run check` | Type check + code-style check + tests. Run before deploying |
 | `npm run db:migrate` | Applies new database changes to Supabase |
 | `npm run db:migrate -- --status` | Lists which database changes are applied |
+| `npm run demo:create -- you@example.com` | Adds the sample company **Coral Bay Resort** to your account, full of realistic data (see below) |
+| `npm run demo:remove -- you@example.com` | Deletes that sample company again |
 
 ---
 
@@ -266,6 +269,111 @@ scripts/db-migrate.mjs      ← installs database changes
 ### Backups
 
 Supabase backs up the database automatically every day (7 days kept on the Pro plan; the Free plan has limited backups, so upgrade to Pro before going live). Owners can also download all their company's data at any time from Workspace → Your data.
+
+---
+
+## Sample company for demos
+
+To show Harbor to someone without using real people's data:
+
+```bash
+npm run demo:create -- you@example.com
+```
+
+Use the email you sign in to Harbor with. It adds a company called **Coral Bay Resort** to your account with 14 staff across two locations and data in every tool:
+- **Time:** two weeks of shifts and clock-ins, with some people clocked in right now.
+- **Pay:** time off, claims, and last month's payroll finished and paid.
+- **Hiring and papers:** an open role with candidates, a new joiner's checklist, and work permits with some expiring soon.
+- **Grow:** a food safety course, an open review round, goals, a survey and two news posts.
+
+Sign in and choose it in the company switcher at the top left. You're its owner and also its general manager, so the staff app works too.
+
+When you're done:
+
+```bash
+npm run demo:remove -- you@example.com
+```
+
+This only deletes the sample company, never your real one. The script signs in as you using the secret key in `.env.local`; no email is sent.
+
+---
+
+## Security review
+
+Before launch, the whole app was reviewed for ways one person could reach data they shouldn't. Every issue found was fixed, and each fix has an automated test (`tests/db/security-hardening.test.ts`) so it stays fixed:
+
+- **Pay:** only an owner can give someone a role that sees other people's pay or changes roles. Nobody but an owner can re-link their own login to another person's profile.
+- **Records staff can't write directly:** their own clock-ins, timesheets and course progress. Those go through the app's checked steps (clock in, time fix requests, lessons and quizzes).
+- **Reviews:** staff don't see their manager's rating or notes until the review is shared with them.
+- **Anonymous surveys:** answers can't be matched to who replied, even by someone who can read the database directly.
+- **Files:** a file HR hid from someone can't be downloaded by them.
+- **Checklists:** only people allowed to can start one.
+- **Careers form:**
+  - A CV must really be a PDF, Word file or photo; a renamed file is refused.
+  - One email address can apply at most 5 times a day per company.
+  - Someone applying again can't overwrite an existing applicant's details.
+- **Sign-in links:** can't redirect people to another website.
+- **Spreadsheet exports:** can't carry formulas typed into the careers form.
+- **Browser settings:** every page tells browsers not to let other sites frame Harbor, to use HTTPS only, and to allow only camera and location (for clock-in).
+
+One limit to know about: someone who can invite staff could invite a second email address of their own and link it to another person's profile, which would show them that person's own pay and payslips. Invitations and links are recorded in the Activity log. Give "People & access" rights only to people you trust with that.
+
+---
+
+## Going live on harbor.nuit.works
+
+Do these in order. Each one is a few clicks. Where it says "copy", never paste keys into chats or emails.
+
+### 1. Upgrade Supabase to Pro
+**Supabase → your project → Settings → Billing → Upgrade to Pro.** This gives daily backups kept for 7 days, and no pausing when the project is quiet. While you're there, note your project's **region** (Settings → General, for example "Southeast Asia (Singapore)"); you need it in step 5.
+
+### 2. Set up email with Resend
+1. Sign up at **resend.com** and choose **Domains → Add domain**, then enter `nuit.works`.
+2. Resend shows a few DNS records. Add each one where you manage the nuit.works domain (the company you bought it from, or Cloudflare), exactly as shown. Back in Resend, click **Verify**; it can take up to an hour.
+3. In Resend, go to **API Keys → Create API key** (name it "Harbor"). Keep the page open for step 4.
+4. In `src/config/app.config.ts`, set `fromAddress` to the address emails come from, for example `no-reply@nuit.works` (tell me which you'd like and I'll set it).
+5. So that sign-up and password emails also go through Resend, in **Supabase → Authentication → Emails → SMTP Settings**, turn on **Custom SMTP** and enter:
+   - **Host:** `smtp.resend.com`
+   - **Port:** `465`
+   - **Username:** `resend`
+   - **Password:** your Resend API key
+   - **Sender:** the same from address.
+
+### 3. Add the settings on Vercel
+**Vercel → your project → Settings → Environment Variables.** Add each of these for **Production** (copy the values from your `.env.local` where you have them):
+
+| Name | Value |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | same as `.env.local` |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | same as `.env.local` |
+| `SUPABASE_SECRET_KEY` | same as `.env.local` |
+| `NEXT_PUBLIC_SITE_URL` | `https://harbor.nuit.works` |
+| `RESEND_API_KEY` | the key from Resend |
+| `CRON_SECRET` | any long random text, for example 40 letters and numbers typed at random |
+
+Then **Deployments → the latest one → ⋯ → Redeploy** so the new settings are used.
+
+### 4. Point harbor.nuit.works at Vercel
+1. **Vercel → your project → Settings → Domains → Add**, enter `harbor.nuit.works`.
+2. Vercel shows one record to add, usually a **CNAME** named `harbor` pointing to `cname.vercel-dns.com`. Add it where you manage nuit.works.
+3. Wait until Vercel shows a green tick (a few minutes to an hour). HTTPS is set up for you.
+
+### 5. Put Harbor's server next to the database
+**Vercel → Settings → Functions → Function Region**: choose the region closest to your Supabase region from step 1 (for example Singapore, `sin1`). Pages then load several times faster. Redeploy afterwards.
+
+### 6. Tell Supabase the real address
+**Supabase → Authentication → URL Configuration:**
+- **Site URL:** `https://harbor.nuit.works`
+- **Redirect URLs:** add `https://harbor.nuit.works/**` (keep the localhost one for testing on your computer).
+- Click **Save**.
+
+Also turn on **Authentication → Providers → Email → Prevent use of leaked passwords**, if your plan offers it.
+
+### 7. Check it works
+1. Open **https://harbor.nuit.works/setup**. Every line should have a green tick.
+2. Sign up with a new email address and check the confirmation email arrives from your address.
+3. Share `https://harbor.nuit.works` in a WhatsApp chat with yourself and check the preview card shows.
+4. The next morning, check **Vercel → your project → Logs** for the 02:00 (UTC) daily reminder job, which should show a 200 result.
 
 ---
 

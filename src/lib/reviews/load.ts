@@ -55,3 +55,48 @@ export async function loadReview(supabase: SupabaseClient, reviewId: string) {
     answers: { self: byType("self"), manager: byType("manager") },
   };
 }
+
+/**
+ * The signed-in person's own review, for the staff app. The review row itself
+ * is hidden from them until it's shared, so this reads through my_reviews(),
+ * which leaves out the manager's rating and notes until then.
+ */
+export async function loadMyReview(supabase: SupabaseClient, businessId: string, reviewId: string) {
+  const { data } = await supabase.rpc("my_reviews", { p_business: businessId });
+  const r = ((data ?? []) as MyReviewRow[]).find((x) => x.id === reviewId);
+  if (!r) return null;
+  const [{ data: questions }, { data: responses }] = await Promise.all([
+    supabase.from("review_questions").select("id, section, question, kind, audience, is_required, sort").eq("template_id", r.template_id).order("sort"),
+    supabase.from("review_responses").select("question_id, respondent_type, rating, answer").eq("review_id", reviewId),
+  ]);
+  const byType = (t: string) =>
+    Object.fromEntries((responses ?? []).filter((x) => x.respondent_type === t).map((x) => [x.question_id, { rating: x.rating, answer: x.answer } as ReviewAnswer]));
+  return {
+    review: r,
+    scale: (r.rating_scale ?? []) as Scale,
+    questions: (questions ?? [])
+      .filter((q) => q.audience === "all" || q.audience === "self")
+      .map((q) => ({ id: q.id, section: q.section, question: q.question, kind: q.kind as ReviewQuestion["kind"], is_required: q.is_required })),
+    answers: { self: byType("self"), manager: byType("manager") },
+  };
+}
+
+export interface MyReviewRow {
+  id: string;
+  business_id: string;
+  status: string;
+  employee_id: string;
+  self_submitted_at: string | null;
+  employee_comment: string | null;
+  overall_rating: number | null;
+  manager_summary: string | null;
+  meeting_notes: string | null;
+  cycle_id: string;
+  cycle_name: string;
+  cycle_status: string;
+  period_start: string;
+  period_end: string;
+  self_review_due: string | null;
+  template_id: string;
+  rating_scale: Scale | null;
+}

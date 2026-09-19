@@ -11,6 +11,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:migrate": "node scripts/db-migrate.mjs",
+    "demo:create": "tsx scripts/demo-data.ts create",
+    "demo:remove": "tsx scripts/demo-data.ts remove",
     "check": "npm run typecheck && npm run lint && npm test"
   },
   "dependencies": {

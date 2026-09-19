@@ -45,7 +45,20 @@ export function parseCsv(text: string): string[][] {
   return rows.filter((r) => r.some((v) => v.trim() !== ""));
 }
 
-function escape(value: string): string {
+/**
+ * Spreadsheet apps run cells that start with = + - or @ as formulas, so a name
+ * typed on the public careers form could run in HR's spreadsheet. Such text
+ * gets a leading apostrophe; plain numbers like -250.00 are left alone.
+ */
+function neutralise(value: string): string {
+  const first = value.charCodeAt(0);
+  const risky = value[0] === "=" || value[0] === "+" || value[0] === "-" || value[0] === "@" || first === 9 || first === 13;
+  if (risky && !/^[-+]?[0-9]+([.][0-9]+)?$/.test(value)) return `'${value}`;
+  return value;
+}
+
+function escape(raw: string): string {
+  const value = neutralise(raw);
   return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 }
 

@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/ui/page";
 import { StatusDot } from "@/components/ui/table";
 import { getStaffContext } from "@/lib/staff/context";
 import { formatDate } from "@/lib/format";
+import type { MyReviewRow } from "@/lib/reviews/load";
 
 export const metadata: Metadata = { title: "My reviews" };
 
@@ -22,19 +23,16 @@ const MINE: Record<string, { label: string; tone: "success" | "warning" | "info"
 export default async function StaffReviews() {
   const { active, me, supabase } = await getStaffContext();
   if (!me) return <Alert tone="warning">Your login isn&apos;t linked to a staff profile yet. Ask HR to link it.</Alert>;
-  const { data: reviews } = await supabase
-    .from("reviews")
-    .select("id, status, cycle:review_cycles(name, status, period_start, period_end, self_review_due)")
-    .eq("employee_id", me.id)
-    .order("created_at", { ascending: false });
+  const { data } = await supabase.rpc("my_reviews", { p_business: active.business_id });
+  const reviews = (data ?? []) as MyReviewRow[];
 
   return (
     <div className="space-y-6">
       <PageHeader back={{ href: "/staff", label: "Home" }} title="My reviews" description="Rate how the period went, then read your manager's view once they share it." />
-      {reviews?.length ? (
+      {reviews.length ? (
         <ul className="divide-y divide-border rounded-xl border border-border">
           {reviews.map((r) => {
-            const c = r.cycle as unknown as { name: string; status: string; period_start: string; period_end: string; self_review_due: string | null };
+            const c = { name: r.cycle_name, status: r.cycle_status, period_start: r.period_start, period_end: r.period_end, self_review_due: r.self_review_due };
             const s = MINE[r.status] ?? MINE.self_review;
             return (
               <li key={r.id}>

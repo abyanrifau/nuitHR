@@ -205,7 +205,7 @@ export const appConfig = {
   email: {
     /** Which email service to use: "resend" or "console" (prints emails in the terminal, for testing). */
     provider: "resend" as "resend" | "console",
-    fromName: "Nuit Works",
+    fromName: "Harbor",
     /** Must be an address on a domain you have verified with your email provider. */
     fromAddress: "no-reply@example.com",
   },
