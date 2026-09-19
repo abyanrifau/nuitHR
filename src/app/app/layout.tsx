@@ -13,6 +13,7 @@ import { signOut } from "@/lib/auth/actions";
 import { getActiveBusiness, getMyBusinesses, requireUser, toAccessContext } from "@/lib/auth/session";
 import { createClient } from "@/lib/supabase/server";
 import { adminNavigation } from "@/modules/access";
+import { PlanBanner } from "@/components/app-shell/plan-banner";
 import { BusinessSwitcher } from "./business-switcher";
 
 /** Signed-in app: sidebar (Home, Requests, Hire / Run / Pay / Grow, Workspace) and a top bar. */
@@ -83,6 +84,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
             </form>
           </div>
         </header>
+        <PlanBanner active={active} />
         <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">{children}</main>
       </div>
     </div>

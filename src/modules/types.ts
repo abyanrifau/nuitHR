@@ -94,6 +94,8 @@ export interface NavItem {
   icon: IconName;
   /** Shown only if the user has this permission (any scope). */
   requires?: { resource: string; action: PermissionAction };
+  /** Shown only to the company's owners. */
+  ownerOnly?: boolean;
 }
 
 export interface PortalItem {

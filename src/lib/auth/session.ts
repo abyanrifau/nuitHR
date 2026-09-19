@@ -6,9 +6,12 @@ import { connection } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { isSupabaseConfigured } from "@/lib/env";
 import type { AccessContext } from "@/modules/access";
+import { allResources } from "@/modules/registry";
 import type { ModuleKey, PermissionAction, PermissionScope } from "@/modules/types";
 
 export const ACTIVE_BUSINESS_COOKIE = "active_business_id";
+/** Set when a Harbor platform admin opens a company's workspace as support (from /admin). */
+export const SUPPORT_COOKIE = "support_business_id";
 
 export interface SessionUser {
   id: string;
@@ -31,6 +34,9 @@ export interface BusinessAccess {
   employee_id: string | null;
   modules: ModuleKey[];
   permissions: { resource: string; action: PermissionAction; scope: PermissionScope }[];
+  /** True when a Harbor platform admin is viewing this company as support (read-only, no pay data). */
+  support?: boolean;
+  support_expires_at?: string;
 }
 
 /** The signed-in user, or null. Verified from the session token. */
@@ -58,7 +64,21 @@ export const getMyBusinesses = cache(async (): Promise<BusinessAccess[]> => {
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("get_my_access");
   if (error) throw new Error(`Could not load your businesses: ${error.message}`);
-  return (data ?? []) as BusinessAccess[];
+  const mine = (data ?? []) as BusinessAccess[];
+  // Support viewing: only the company opened from /admin (which logs it), and
+  // only while that company has support access switched on. The database
+  // enforces the same: view only, and never pay data.
+  const supportFor = (await cookies()).get(SUPPORT_COOKIE)?.value;
+  if (!supportFor) return mine;
+  const { data: support } = await supabase.rpc("my_support_access");
+  const s = ((support ?? []) as (Omit<BusinessAccess, "role_id" | "role_key" | "role_name" | "is_owner" | "employee_id" | "permissions"> & { support_expires_at: string })[]).find(
+    (b) => b.business_id === supportFor,
+  );
+  if (!s) return mine;
+  const permissions = allResources()
+    .filter((r) => !["compensation", "payroll", "payslips"].includes(r.key))
+    .map((r) => ({ resource: r.key, action: "view" as PermissionAction, scope: "all" as PermissionScope }));
+  return [...mine, { ...s, role_id: "", role_key: "support", role_name: "Support (view only)", is_owner: false, employee_id: null, permissions, support: true }];
 });
 
 /**

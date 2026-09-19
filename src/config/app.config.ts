@@ -74,6 +74,25 @@ export const appConfig = {
   },
 
   // ----------------------------------------------------------
+  // Billing (payments are made by bank transfer or mobile payment
+  // and confirmed by you in the admin panel; there's no card payment)
+  // ----------------------------------------------------------
+  billing: {
+    /** Days a company keeps full access after its trial or paid period ends. (The database uses the same 7.) */
+    graceDays: 7,
+    /** Shown to company owners in Workspace → Billing. Leave empty until you have them; nothing is shown then. */
+    bankTransfer: {
+      bankName: "",
+      accountName: "",
+      accountNumber: "",
+      /** Optional, e.g. "Or pay by BML mobile transfer to 7xxxxxx". */
+      otherWays: "",
+    },
+    /** Where owners send their payment receipt. Empty = the support email above. */
+    receiptEmail: "",
+  },
+
+  // ----------------------------------------------------------
   // PLACEHOLDER PRICES — replace with your real prices.
   // Every plan pays the foundation base fee (people directory,
   // requests, letters & files, access & roles, staff app).
@@ -207,7 +226,7 @@ export const appConfig = {
     provider: "resend" as "resend" | "console",
     fromName: "Harbor",
     /** Must be an address on a domain you have verified with your email provider. */
-    fromAddress: "no-reply@example.com",
+    fromAddress: "no-reply@harbor.nuit.works",
   },
 } as const;
 

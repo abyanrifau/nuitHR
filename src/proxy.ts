@@ -42,6 +42,21 @@ export async function proxy(request: NextRequest) {
   const signedIn = !!data?.claims?.sub;
 
   const path = request.nextUrl.pathname;
+
+  // The platform admin area: anyone not on the PLATFORM_ADMIN_EMAILS list gets
+  // exactly the same 404 as for a page that doesn't exist. (The admin pages
+  // check again on the server, including two-step sign-in, for everyone else.)
+  if (path === "/admin" || path.startsWith("/admin/")) {
+    const email = typeof data?.claims?.email === "string" ? data.claims.email.toLowerCase() : "";
+    const admins = (process.env.PLATFORM_ADMIN_EMAILS ?? "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+    if (!email || !admins.includes(email)) {
+      const hidden = request.nextUrl.clone();
+      hidden.pathname = "/_hidden-not-found";
+      hidden.search = "";
+      return NextResponse.rewrite(hidden, { headers: response.headers });
+    }
+  }
+
   const isPrivate = PRIVATE_PREFIXES.some((p) => path === p || path.startsWith(p + "/"));
 
   if (isPrivate && !signedIn) {

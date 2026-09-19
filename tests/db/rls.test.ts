@@ -47,8 +47,9 @@ describe("schema safety net", () => {
       select table_name, is_nullable from information_schema.columns
        where table_schema = 'public' and column_name = 'business_id'`);
     for (const r of rows.rows) {
-      // audit_log: sign-ins without a business; onboarding_drafts: a user's wizard before the business exists
-      if (r.table_name === "audit_log" || r.table_name === "onboarding_drafts") continue;
+      // audit_log: sign-ins without a business; onboarding_drafts: a user's wizard before the business exists;
+      // platform_audit_log: Nuit Works' own log, which also has platform-wide entries
+      if (r.table_name === "audit_log" || r.table_name === "onboarding_drafts" || r.table_name === "platform_audit_log") continue;
       expect(r.is_nullable, r.table_name).toBe("NO");
     }
   });

@@ -53,7 +53,8 @@ export function enabledModules(ctx: Pick<AccessContext, "modules">): ModuleDefin
   return MODULES.filter((m) => m.core || ctx.modules.includes(m.key));
 }
 
-function allowed(ctx: AccessContext, item: { requires?: { resource: string; action: PermissionAction } }) {
+function allowed(ctx: AccessContext, item: { requires?: { resource: string; action: PermissionAction }; ownerOnly?: boolean }) {
+  if (item.ownerOnly && !ctx.isOwner) return false;
   return !item.requires || can(ctx, item.requires.resource, item.requires.action);
 }
 

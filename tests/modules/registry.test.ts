@@ -210,6 +210,7 @@ describe("navigation adapts to switched-on tools", () => {
       "/app/workspace/notifications",
       "/app/workspace/activity",
       "/app/workspace/data",
+      "/app/workspace/billing",
       "/app/workspace/support",
     ]);
   });

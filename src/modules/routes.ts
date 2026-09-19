@@ -21,6 +21,7 @@ export const AVAILABLE_ROUTES = new Set<string>([
   "/app/workspace/activity",
   "/app/workspace/data",
   "/app/workspace/support",
+  "/app/workspace/billing",
   "/app/workspace/tools/employees",
   "/app/workspace/tools/leave",
   "/app/workspace/tools/attendance",

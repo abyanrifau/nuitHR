@@ -1,3 +1,4 @@
+import { PlanBanner } from "@/components/app-shell/plan-banner";
 import type { ReactNode } from "react";
 import type { Metadata, Viewport } from "next";
 import Link from "next/link";
@@ -68,6 +69,7 @@ export default async function StaffLayout({ children }: { children: ReactNode })
           </div>
         </div>
       </header>
+      <PlanBanner active={active} />
       <main className="mx-auto max-w-lg px-4 py-6">{children}</main>
       <BottomTabs tabs={tabs} />
     </div>

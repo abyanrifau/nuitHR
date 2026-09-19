@@ -171,6 +171,8 @@ Open **http://localhost:3000/setup** in your browser. Every line should have a g
 | Checklist steps (templates) | `/app/joiners-leavers/checklists` | rights to see checklists |
 | Permits & renewals | `/app/permits` | rights to see permits |
 | Staff app: My tasks | `/staff/tasks` | Joiners & leavers switched on |
+| Billing (plan, paid-until date, payments, how to pay) | `/app/workspace/billing` | the company owner |
+| Platform admin (Harbor's own admin area; hidden) | `/admin`, `/admin/businesses`, `/admin/businesses/<company>`, `/admin/activity` | your email in `PLATFORM_ADMIN_EMAILS`, confirmed, with two-step sign-in |
 | Training (courses) | `/app/training` | rights to manage courses |
 | New course | `/app/training/new` | rights to manage courses |
 | A course (lessons, quiz questions, who takes it, progress) | `/app/training/<course>` | rights to manage courses |
@@ -216,6 +218,7 @@ While email sending isn't set up, invitation emails are printed in the terminal 
 | `DATABASE_URL` | For `npm run db:migrate` | Direct database connection used to install/update tables |
 | `NEXT_PUBLIC_SITE_URL` | When deployed | Your public web address (for links in emails), e.g. `https://app.yourbrand.com` |
 | `RESEND_API_KEY` | For real emails | Sends app emails (notifications, letters ready, payslips). Without it, emails are printed in the terminal on your computer |
+| `PLATFORM_ADMIN_EMAILS` | For the admin area | Emails of Harbor's own admins (you), comma separated, e.g. `abyan@nuit.works`. Only these can open `/admin`. See **Platform admin** below |
 | `CRON_SECRET` | Optional, on Vercel | Any long random text. Lets Vercel run the daily catch-up that emails any notifications that didn't go out straight away (see `vercel.json`) |
 
 On Vercel you'll enter the same names and values under **Project → Settings → Environment Variables** (see **Going live** below).
@@ -320,6 +323,61 @@ One limit to know about: someone who can invite staff could invite a second emai
 
 ---
 
+## Platform admin (for you)
+
+Harbor has a private admin area for Nuit Works at **harbor.nuit.works/admin**. It's separate from the admin roles inside each company, and it lets you see every company on Harbor and manage their subscriptions.
+
+**Who can open it:**
+- Someone whose email is in the `PLATFORM_ADMIN_EMAILS` setting.
+- Signed in with that email, and the email is confirmed.
+- With two-step sign-in (a code from an authenticator app). The first time, the admin area asks you to set it up.
+
+Everyone else gets an ordinary "page not found", so nobody can tell the area exists. There's no link to it on the public site or inside company workspaces. When you're signed in as a platform admin, a small **Admin** link appears at the top of your account page (Your account).
+
+**What's in it:**
+- **Overview:**
+  - Numbers: companies, active and paying, on trial, ending in the next 7 days, suspended, total staff and estimated monthly revenue.
+  - New signups over the last 90 days.
+  - A "needs attention" list: trials and paid periods ending soon, overdue payments, and companies that never finished setup.
+- **Companies:** every company with its owner, contact details, staff, tools, status, dates and price. It has search, filters and sorting, plus **Export CSV**.
+- **One company:**
+  - **What you see:** profile, owner and admin contacts, locations, usage, subscription, payments, private notes, and this company's admin log. Never staff personal details, salaries, IDs or documents.
+  - **Actions:** each asks you to confirm and give a reason.
+    - Extend a trial.
+    - Extend the subscription.
+    - Change status: suspend, reactivate or cancel.
+    - Turn tools on or off.
+    - Set a custom price or a discount.
+    - Record a payment (with receipt).
+    - Email the owner.
+    - Add a private note.
+    - Open their workspace as support: only when the company has switched on support access, view only, never pay data.
+- **Admin log:** every action, with who, what, which company, why, and the values before and after.
+
+**Subscriptions:**
+- A trial lasts the number of days in the config file (30).
+- Payments are manual: you confirm bank transfers or mobile payments by recording them. Recording a payment makes the company active and moves its paid-until date to the end of the period it covers.
+- When a trial or paid period ends, the company gets a **7-day grace period**. The owner sees a banner during it. After that the account becomes **read-only** until you record a payment or extend it: they can still view and export their data, and message support.
+- Owners get emails 7 days and 1 day before the end, and when the account is paused. These are sent by the daily job at 02:00 UTC.
+- Owners see their plan, paid-until date, payment history and how to pay in **Workspace → Billing**. To show your bank details there, fill in `billing.bankTransfer` in `src/config/app.config.ts`. Until then it tells them to email you.
+
+### Adding another admin (or yourself) on Vercel
+1. Go to **vercel.com → your Harbor project → Settings → Environment Variables**.
+2. If `PLATFORM_ADMIN_EMAILS` isn't there yet, click **Add New**:
+   - **Name:** `PLATFORM_ADMIN_EMAILS`
+   - **Value:** `abyan@nuit.works`
+   - **Environments:** tick **Production** (and Preview if you use it)
+   - Click **Save**.
+3. To add someone later, click the **⋯** next to `PLATFORM_ADMIN_EMAILS` → **Edit**. Add their email after a comma, with no spaces needed, for example `abyan@nuit.works,colleague@nuit.works`. Click **Save**.
+4. Go to **Deployments → the latest one → ⋯ → Redeploy**. Settings only take effect after a redeploy.
+5. The new admin signs up or signs in to Harbor with exactly that email, confirms it, then opens harbor.nuit.works/admin. They'll be asked to set up two-step sign-in the first time.
+
+To remove an admin, delete their email from the list and redeploy. They lose access straight away, and their support access goes with it at the next daily job, or the next time any admin opens the admin area.
+
+On your own computer, the same setting is in `.env.local`.
+
+---
+
 ## Going live on harbor.nuit.works
 
 Do these in order. Each one is a few clicks. Where it says "copy", never paste keys into chats or emails.
@@ -328,10 +386,10 @@ Do these in order. Each one is a few clicks. Where it says "copy", never paste k
 **Supabase → your project → Settings → Billing → Upgrade to Pro.** This gives daily backups kept for 7 days, and no pausing when the project is quiet. While you're there, note your project's **region** (Settings → General, for example "Southeast Asia (Singapore)"); you need it in step 5.
 
 ### 2. Set up email with Resend
-1. Sign up at **resend.com** and choose **Domains → Add domain**, then enter `nuit.works`.
-2. Resend shows a few DNS records. Add each one where you manage the nuit.works domain (the company you bought it from, or Cloudflare), exactly as shown. Back in Resend, click **Verify**; it can take up to an hour.
+1. Sign up at **resend.com** and choose **Domains → Add domain**, then enter `harbor.nuit.works`.
+2. Resend shows a few DNS records. Add each one where you manage the nuit.works domain (the company you bought it from, or Cloudflare), exactly as shown (they go on names under harbor.nuit.works, so they don't clash with the website). Back in Resend, click **Verify**; it can take up to an hour.
 3. In Resend, go to **API Keys → Create API key** (name it "Harbor"). Keep the page open for step 4.
-4. In `src/config/app.config.ts`, set `fromAddress` to the address emails come from, for example `no-reply@nuit.works` (tell me which you'd like and I'll set it).
+4. In `src/config/app.config.ts`, `fromAddress` is set to `no-reply@harbor.nuit.works`.
 5. So that sign-up and password emails also go through Resend, in **Supabase → Authentication → Emails → SMTP Settings**, turn on **Custom SMTP** and enter:
    - **Host:** `smtp.resend.com`
    - **Port:** `465`
@@ -350,6 +408,7 @@ Do these in order. Each one is a few clicks. Where it says "copy", never paste k
 | `NEXT_PUBLIC_SITE_URL` | `https://harbor.nuit.works` |
 | `RESEND_API_KEY` | the key from Resend |
 | `CRON_SECRET` | any long random text, for example 40 letters and numbers typed at random |
+| `PLATFORM_ADMIN_EMAILS` | `abyan@nuit.works` |
 
 Then **Deployments → the latest one → ⋯ → Redeploy** so the new settings are used.
 

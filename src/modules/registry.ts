@@ -306,6 +306,7 @@ export const MODULES: ModuleDefinition[] = [
       { label: "Notification settings", href: "/app/workspace/notifications", icon: "bell", requires: { resource: "settings", action: "view" } },
       { label: "Activity log", href: "/app/workspace/activity", icon: "history", requires: { resource: "audit", action: "view" } },
       { label: "Your data", href: "/app/workspace/data", icon: "download", requires: { resource: "data_export", action: "view" } },
+      { label: "Billing", href: "/app/workspace/billing", icon: "wallet", ownerOnly: true },
       { label: "Reports", href: "/app/reports", icon: "bar-chart" },
       { label: "Help & support", href: "/app/workspace/support", icon: "life-buoy" },
     ],
