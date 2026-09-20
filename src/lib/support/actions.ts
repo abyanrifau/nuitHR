@@ -5,7 +5,7 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveBusiness, requireUser } from "@/lib/auth/session";
 import { friendly, type ActionResult } from "@/lib/errors";
-import { emailLayout, escapeHtml, sendEmail } from "@/lib/email";
+import { emailFacts, emailLayout, emailParagraphs, sendEmail } from "@/lib/email";
 import { appConfig } from "@/config/app.config";
 
 const ticketSchema = z.object({
@@ -32,7 +32,7 @@ export async function createTicket(_: ActionResult, form: FormData): Promise<Act
     to: appConfig.brand.supportEmail,
     subject: `[${d.category}] ${d.subject}`,
     text: `From ${user.email} at ${active.business_name}\nTicket ${data.id}\n\n${d.message}`,
-    html: emailLayout(d.subject, `<p>From ${escapeHtml(user.email ?? "")} at ${escapeHtml(active.business_name)}<br>Ticket ${data.id}</p><p style="white-space:pre-wrap">${escapeHtml(d.message)}</p>`),
+    html: emailLayout(d.subject, `${emailFacts([["From", user.email ?? ""], ["Company", active.business_name], ["Ticket", data.id]])}${emailParagraphs(d.message)}`),
   });
   revalidatePath("/app/workspace/support");
   return { ok: true, message: "Sent. We'll reply by email, usually within one working day." };

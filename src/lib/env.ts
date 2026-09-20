@@ -4,6 +4,8 @@
  * See README → "Environment variables" for what each one is.
  */
 
+import { appConfig } from "@/config/app.config";
+
 export function supabaseUrl(): string | undefined {
   return process.env.NEXT_PUBLIC_SUPABASE_URL || undefined;
 }
@@ -29,10 +31,18 @@ export function requireSupabasePublicEnv(): { url: string; key: string } {
   return { url, key };
 }
 
-/** The web address of this app, used in email links. */
+/**
+ * The web address of this app: the one used in email links, and the one
+ * visitors are sent to if they arrive on a different address (such as the
+ * vercel.app one). NEXT_PUBLIC_SITE_URL wins, then the address in
+ * src/config/app.config.ts, so links are right even if the setting is
+ * missing on Vercel.
+ */
 export function siteUrl(): string {
   const explicit = process.env.NEXT_PUBLIC_SITE_URL;
   if (explicit) return explicit.replace(/\/$/, "");
+  const configured = appConfig.brand.siteUrl?.trim().replace(/\/$/, "");
+  if (configured && process.env.NODE_ENV === "production") return configured;
   if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
   return "http://localhost:3000";
 }

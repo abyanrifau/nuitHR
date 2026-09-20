@@ -1,7 +1,8 @@
+import Link from "next/link";
 import { appConfig } from "@/config/app.config";
 import { NuitLink } from "@/components/brand/byline";
 import type { Metadata } from "next";
-import { LogOut } from "lucide-react";
+import { House, LogOut } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
@@ -102,11 +103,16 @@ export default async function StaffMe() {
         <span className="flex items-center gap-2 text-sm text-muted-foreground">
           Light or dark <ThemeToggle />
         </span>
-        <form action={signOut}>
-          <Button type="submit" variant="secondary">
-            <LogOut className="size-4" aria-hidden /> Sign out
-          </Button>
-        </form>
+        <div className="flex items-center gap-2">
+          <Link href="/" className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-accent-soft hover:text-foreground">
+            <House className="size-4" aria-hidden /> {appConfig.brand.name} home
+          </Link>
+          <form action={signOut}>
+            <Button type="submit" variant="secondary">
+              <LogOut className="size-4" aria-hidden /> Sign out
+            </Button>
+          </form>
+        </div>
       </section>
       <p className="text-center text-[12px] text-subtle-foreground">Signed in as {user.email}</p>
       <p className="text-center text-[12px] text-subtle-foreground">

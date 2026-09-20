@@ -1,6 +1,6 @@
 import "server-only";
 import { appConfig } from "@/config/app.config";
-import { emailButton, emailLayout, escapeHtml, sendEmail } from "@/lib/email";
+import { emailButton, emailLayout, emailParagraphs, sendEmail } from "@/lib/email";
 import { siteUrl } from "@/lib/env";
 import { formatDate } from "@/lib/format";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -13,7 +13,7 @@ function message(subject: string, paragraphs: string[]) {
   return {
     subject,
     text: `${paragraphs.join("\n\n")}\n\nBilling and how to pay: ${billingLink()}`,
-    html: emailLayout(subject, `${paragraphs.map((p) => `<p>${escapeHtml(p)}</p>`).join("")}${emailButton(billingLink(), "See billing details")}`),
+    html: emailLayout(subject, `${emailParagraphs(paragraphs.join(String.fromCharCode(10, 10)))}${emailButton(billingLink(), "See billing details")}`, { preheader: paragraphs[0] }),
   };
 }
 

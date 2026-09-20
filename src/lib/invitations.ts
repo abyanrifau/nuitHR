@@ -3,11 +3,14 @@ import { randomBytes, createHash } from "node:crypto";
 import { headers } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { siteUrl } from "@/lib/env";
-import { emailButton, emailLayout, escapeHtml, sendEmail } from "@/lib/email";
+import { emailButton, emailFacts, emailLayout, emailNote, escapeHtml, sendEmail } from "@/lib/email";
 import { appConfig } from "@/config/app.config";
 import { friendly } from "@/lib/errors";
 
 async function origin(): Promise<string> {
+  // Always the real web address online, so an invitation opened from a
+  // preview or vercel.app address still points at harbor.nuit.works.
+  if (process.env.NODE_ENV === "production") return siteUrl();
   const h = await headers();
   const host = h.get("x-forwarded-host") ?? h.get("host");
   if (!host) return siteUrl();
@@ -52,7 +55,13 @@ export async function createInvitation(opts: {
     text: `${opts.inviterName} invited you to join ${opts.businessName} on ${appConfig.brand.name} as ${opts.roleName}.\n\nAccept the invitation: ${link}\n\nThe link expires in 14 days.`,
     html: emailLayout(
       `Join ${opts.businessName}`,
-      `<p>${escapeHtml(opts.inviterName)} invited you to join <strong>${escapeHtml(opts.businessName)}</strong> on ${escapeHtml(appConfig.brand.name)} as <strong>${escapeHtml(opts.roleName)}</strong>.</p>${emailButton(link, "Accept invitation")}<p style="font-size:13px;color:#5a6473">The link expires in 14 days. If you weren't expecting this, you can ignore this email.</p>`,
+      `<p style="margin:0 0 14px">${escapeHtml(opts.inviterName)} has invited you to ${escapeHtml(opts.businessName)} on ${escapeHtml(appConfig.brand.name)}, where the team handles people, time, leave and pay.</p>
+${emailFacts([
+  ["Company", opts.businessName],
+  ["Your access", opts.roleName],
+  ["Invited by", opts.inviterName],
+])}${emailButton(link, "Accept invitation")}${emailNote("The link works for 14 days and only once. If you weren't expecting this, you can safely ignore this email.")}`,
+      { preheader: `${opts.inviterName} has invited you to ${opts.businessName} on ${appConfig.brand.name}.` },
     ),
   });
   return { link, emailed: sent.ok, error: sent.ok ? undefined : sent.error };

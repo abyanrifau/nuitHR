@@ -6,7 +6,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { appConfig } from "@/config/app.config";
 import { ACTIVE_BUSINESS_COOKIE, SUPPORT_COOKIE } from "@/lib/auth/session";
-import { emailButton, emailLayout, escapeHtml, sendEmail } from "@/lib/email";
+import { emailButton, emailLayout, emailParagraphs, sendEmail } from "@/lib/email";
 import type { ActionResult } from "@/lib/errors";
 import { endOfDayIn, formatDate } from "@/lib/format";
 import { siteUrl } from "@/lib/env";
@@ -316,7 +316,7 @@ export async function sendReminder(input: unknown): Promise<ActionResult> {
   const to = await emailOwners(b.id, {
     subject,
     text: `${body}\n\n${billingLink()}`,
-    html: emailLayout(subject, `${body.split("\n\n").map((para) => `<p>${escapeHtml(para)}</p>`).join("")}${emailButton(billingLink(), "See billing details")}`),
+    html: emailLayout(subject, `${emailParagraphs(body)}${emailButton(billingLink(), "See billing details")}`, { preheader: body.slice(0, 120) }),
   });
   if (!to.length) return { error: "This company has no owner email to send to." };
   await logAdminAction(admin, { action: "email.reminder", businessId: b.id, businessName: b.name, reason: d.kind, after: { to, subject, body } });

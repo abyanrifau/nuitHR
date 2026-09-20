@@ -3,7 +3,7 @@
 import { headers } from "next/headers";
 import { z } from "zod";
 import { appConfig } from "@/config/app.config";
-import { escapeHtml, emailLayout, sendEmail } from "@/lib/email";
+import { emailFacts, emailLayout, emailParagraphs, sendEmail } from "@/lib/email";
 import { createAdminClient, isAdminConfigured } from "@/lib/supabase/admin";
 
 export interface ContactState {
@@ -49,7 +49,7 @@ export async function sendContactMessage(_: ContactState, fd: FormData): Promise
     text: `${d.name} <${d.email}>${d.company ? `, ${d.company}` : ""}${d.phone ? `, ${d.phone}` : ""}\n\n${d.message}`,
     html: emailLayout(
       "New contact message",
-      `<p><strong>${escapeHtml(d.name)}</strong> &lt;${escapeHtml(d.email)}&gt;${d.company ? `<br>${escapeHtml(d.company)}` : ""}${d.phone ? `<br>${escapeHtml(d.phone)}` : ""}</p><p style="white-space:pre-wrap">${escapeHtml(d.message)}</p>`,
+      `${emailFacts([["Name", d.name], ["Email", d.email], ...(d.company ? ([["Company", d.company]] as [string, string][]) : []), ...(d.phone ? ([["Phone", d.phone]] as [string, string][]) : [])])}${emailParagraphs(d.message)}`,
     ),
   });
 

@@ -21,6 +21,9 @@ const NOT_CONNECTED: FormState = {
 };
 
 async function origin(): Promise<string> {
+  // Online, always the real web address: confirmation and reset links must
+  // land on the same address the session cookie belongs to.
+  if (process.env.NODE_ENV === "production") return siteUrl();
   const h = await headers();
   return h.get("origin") ?? siteUrl();
 }

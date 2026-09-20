@@ -1,7 +1,8 @@
 import "server-only";
 import { after } from "next/server";
 import { createAdminClient, isAdminConfigured } from "@/lib/supabase/admin";
-import { emailButton, emailLayout, escapeHtml, sendEmail } from "@/lib/email";
+import { emailButton, emailLayout, emailNote, emailParagraphs, sendEmail } from "@/lib/email";
+import { appConfig } from "@/config/app.config";
 import { siteUrl } from "@/lib/env";
 import { MODULES } from "@/modules/registry";
 
@@ -69,7 +70,8 @@ export async function deliverPendingEmails(opts: { businessId?: string; sinceMin
       text: `${n.title}\n\n${n.body ?? ""}\n\nOpen: ${link}\n\n${company}. Change which emails you get in your account settings.`,
       html: emailLayout(
         n.title,
-        `${n.body ? `<p>${escapeHtml(n.body)}</p>` : ""}${emailButton(link, "Open")}<p style="font-size:13px;color:#5a6473">${escapeHtml(company)}. You can change which emails you get in your account settings.</p>`,
+        `${n.body ? emailParagraphs(n.body) : ""}${emailButton(link, `Open ${appConfig.brand.name}`)}${emailNote(`${company}. You can change which emails you get in your account settings.`)}`,
+        { preheader: n.body ?? undefined },
       ),
     });
     await admin

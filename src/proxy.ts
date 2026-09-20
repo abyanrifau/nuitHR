@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
+import { siteUrl } from "@/lib/env";
 
 /**
  * Runs before every page request:
@@ -14,6 +15,12 @@ const PRIVATE_PREFIXES = ["/app", "/staff", "/onboarding"];
 const AUTH_PAGES = ["/login", "/signup"];
 
 export async function proxy(request: NextRequest) {
+  // One address only. Vercel also serves the site at <project>.vercel.app,
+  // and a sign-in saved on one address doesn't exist on the other, so anyone
+  // arriving there is moved to the real address, keeping the page they wanted.
+  const canonical = canonicalRedirect(request);
+  if (canonical) return NextResponse.redirect(canonical, 308);
+
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key) {
@@ -87,6 +94,16 @@ export async function proxy(request: NextRequest) {
   }
 
   return response;
+}
+
+/** The same page on the real web address, or null if we're already on it. */
+function canonicalRedirect(request: NextRequest): URL | null {
+  if (process.env.VERCEL_ENV !== "production") return null;
+  const wanted = new URL(siteUrl());
+  const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host") ?? "";
+  if (!wanted.host || !host || host === wanted.host) return null;
+  const to = new URL(request.nextUrl.pathname + request.nextUrl.search, wanted.origin);
+  return to;
 }
 
 function redirectWithCookies(to: URL, from: NextResponse) {

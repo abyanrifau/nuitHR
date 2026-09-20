@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { LogOut, Smartphone, UserRound } from "lucide-react";
+import { House, LogOut, Smartphone, UserRound } from "lucide-react";
+import { appConfig } from "@/config/app.config";
 import { Logo } from "@/components/brand/logo";
 import { JumpTo, type JumpItem } from "@/components/app-shell/jump-to";
 import { MobileNav } from "@/components/app-shell/mobile-nav";
@@ -61,6 +62,14 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
           <div className="flex items-center gap-2">
             <JumpTo items={jumpItems} />
             <NotificationBell unread={unread ?? 0} />
+            <Link
+              href="/"
+              aria-label={`${appConfig.brand.name} home page`}
+              title={`${appConfig.brand.name} home page`}
+              className="grid size-9 place-items-center rounded-lg text-muted-foreground hover:bg-accent-soft hover:text-foreground"
+            >
+              <House className="size-4" aria-hidden />
+            </Link>
             <Link
               href="/staff"
               aria-label="Staff app"

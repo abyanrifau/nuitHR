@@ -2,6 +2,8 @@ import "server-only";
 import { nuitWorksUrl } from "@/lib/brand";
 import { appConfig } from "@/config/app.config";
 
+export { emailButton, emailFacts, emailLayout, emailNote, emailParagraphs, escapeHtml } from "./design";
+
 /**
  * Sending email. The provider can be swapped: "resend" (real emails) or
  * "console" (prints emails in the terminal, handy while testing). Add
@@ -72,22 +74,3 @@ Sent by ${appConfig.brand.name}, built by ${appConfig.brand.byline.studio}: ${nu
   return provider().send({ ...message, text });
 }
 
-/** Wraps content in a simple, branded email layout. */
-export function emailLayout(title: string, bodyHtml: string): string {
-  return `<!doctype html><html><body style="margin:0;background:#f5f5f5;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;color:#000000">
-<table width="100%" cellpadding="0" cellspacing="0" style="padding:24px 12px"><tr><td align="center">
-<table width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#ffffff;border:1px solid #ebebeb;border-radius:10px">
-<tr><td style="padding:20px 24px;border-bottom:1px solid #ebebeb;font-weight:bold;font-size:18px;letter-spacing:-0.5px;color:#000000">${escapeHtml(appConfig.brand.name)}.</td></tr>
-<tr><td style="padding:24px"><h1 style="font-size:20px;margin:0 0 12px">${escapeHtml(title)}</h1>${bodyHtml}</td></tr>
-</table>
-<p style="font-size:12px;color:#8a93a1;margin-top:16px">Sent by ${escapeHtml(appConfig.brand.name)}, built by <a href="${escapeHtml(nuitWorksUrl("email"))}" target="_blank" rel="noopener" style="color:#8a93a1;text-decoration:underline">${escapeHtml(appConfig.brand.byline.studio)}</a></p>
-</td></tr></table></body></html>`;
-}
-
-export function emailButton(href: string, label: string): string {
-  return `<p style="margin:24px 0"><a href="${escapeHtml(href)}" style="background:#000000;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:6px;font-weight:bold;display:inline-block">${escapeHtml(label)}</a></p>`;
-}
-
-export function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
-}
