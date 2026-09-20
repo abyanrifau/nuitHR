@@ -102,9 +102,17 @@ function canonicalRedirect(request: NextRequest): URL | null {
   const wanted = new URL(siteUrl());
   const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host") ?? "";
   if (!wanted.host || !host || host === wanted.host) return null;
+  // Only ever send someone once. If the address they came from sends them
+  // straight back (a redirect set up on the domain itself), the mark below
+  // is still on the web address, and they stay where they are instead of
+  // bouncing between the two forever.
+  if (request.nextUrl.searchParams.has(SENT_HOME)) return null;
   const to = new URL(request.nextUrl.pathname + request.nextUrl.search, wanted.origin);
+  to.searchParams.set(SENT_HOME, "1");
   return to;
 }
+
+const SENT_HOME = "_h";
 
 function redirectWithCookies(to: URL, from: NextResponse) {
   const redirect = NextResponse.redirect(to);
