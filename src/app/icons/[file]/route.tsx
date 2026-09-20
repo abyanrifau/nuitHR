@@ -1,5 +1,4 @@
-import { ImageResponse } from "next/og";
-import { appConfig } from "@/config/app.config";
+import { renderHarborMark } from "@/lib/og/harbor-mark";
 
 /**
  * Home-screen icons, drawn from the brand name so there are no image files
@@ -17,17 +16,5 @@ export async function GET(_: Request, { params }: RouteContext<"/icons/[file]">)
   const m = file.match(/^(maskable-)?(\d+)\.png$/);
   const size = m ? Number(m[2]) : 0;
   if (![180, 192, 512].includes(size)) return new Response("Not found", { status: 404 });
-  const maskable = Boolean(m?.[1]);
-  const letter = appConfig.brand.name.trim().charAt(0).toUpperCase();
-  return new ImageResponse(
-    (
-      <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "#000000" }}>
-        <div style={{ display: "flex", alignItems: "baseline", color: "#ffffff", fontSize: size * (maskable ? 0.42 : 0.56), fontWeight: 700, letterSpacing: "-0.04em" }}>
-          {letter}
-          <span style={{ fontSize: size * (maskable ? 0.42 : 0.56) }}>.</span>
-        </div>
-      </div>
-    ),
-    { width: size, height: size },
-  );
+  return renderHarborMark(size, { padding: m?.[1] ? 0.3 : 0.22 });
 }
