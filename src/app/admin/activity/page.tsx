@@ -1,4 +1,3 @@
-import type { Metadata } from "next";
 import Link from "next/link";
 import { Table, Td, Th, Tr } from "@/components/ui/table";
 import { formatDateTime } from "@/lib/format";

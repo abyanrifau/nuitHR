@@ -13,6 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import type { ActionResult } from "@/lib/errors";
 import {
   addNote,
+  deleteBusiness,
   extendSubscription,
   extendTrial,
   openAsSupport,
@@ -40,7 +41,7 @@ export interface AdminBusinessView {
   supportUntil: string | null;
 }
 
-type Kind = "trial" | "subscription" | "status" | "tools" | "price" | "payment" | "reminder" | "note" | "support";
+type Kind = "trial" | "subscription" | "status" | "tools" | "price" | "payment" | "reminder" | "note" | "support" | "delete";
 
 const localDate = (iso: string | null, tz: string) => (iso ? new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date(iso)) : "");
 function plusMonths(day: string, n: number) {
@@ -326,6 +327,29 @@ function SupportForm({ b }: { b: AdminBusinessView }) {
   );
 }
 
+function DeleteForm({ b }: { b: AdminBusinessView }) {
+  const [name, setName] = useState("");
+  const router = useRouter();
+  return (
+    <Confirm
+      label="Delete this company for good"
+      onConfirm={async (reason) => {
+        const r = await deleteBusiness({ businessId: b.id, confirmName: name, reason });
+        if (!r.error) router.push("/admin/businesses");
+        return r;
+      }}
+    >
+      <p className="text-sm text-muted-foreground">
+        This permanently removes {b.name} and everything in it: staff records, attendance, leave, payroll, claims and uploaded files. Their logins stay, but they will no longer
+        belong to this company. <strong className="text-foreground">This cannot be undone.</strong> The admin log keeps a record that you deleted it.
+      </p>
+      <Field label="Type the company name to confirm" htmlFor="adm-del-name">
+        <Input id="adm-del-name" value={name} onChange={(e) => setName(e.target.value)} placeholder={b.name} autoComplete="off" />
+      </Field>
+    </Confirm>
+  );
+}
+
 const TITLES: Record<Kind, string> = {
   trial: "Extend trial",
   subscription: "Extend subscription",
@@ -336,6 +360,7 @@ const TITLES: Record<Kind, string> = {
   reminder: "Send an email",
   note: "Add a note",
   support: "Support access",
+  delete: "Delete company",
 };
 
 export function BusinessActions({ business: b, tools }: { business: AdminBusinessView; tools: { key: string; name: string; requires: string[] }[] }) {
@@ -350,6 +375,9 @@ export function BusinessActions({ business: b, tools }: { business: AdminBusines
             {k === "support" && (b.supportUntil ? " (on)" : " (off)")}
           </Button>
         ))}
+        <Button variant="danger" size="sm" onClick={() => setOpen("delete")}>
+          Delete company
+        </Button>
       </div>
       <Modal open={open !== null} onClose={() => setOpen(null)} title={open ? `${TITLES[open]}: ${b.name}` : ""}>
         <CloseForm.Provider value={() => setOpen(null)}>
@@ -362,6 +390,7 @@ export function BusinessActions({ business: b, tools }: { business: AdminBusines
         {open === "reminder" && <ReminderForm b={b} />}
         {open === "note" && <NoteForm b={b} />}
         {open === "support" && <SupportForm b={b} />}
+        {open === "delete" && <DeleteForm b={b} />}
         </CloseForm.Provider>
       </Modal>
     </>

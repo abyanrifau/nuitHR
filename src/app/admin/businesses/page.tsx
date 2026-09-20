@@ -1,4 +1,3 @@
-import type { Metadata } from "next";
 import Link from "next/link";
 import { Download } from "lucide-react";
 import { buttonClasses } from "@/components/ui/button";

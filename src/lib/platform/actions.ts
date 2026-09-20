@@ -14,7 +14,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { CORE_MODULE_KEYS, MODULE_MAP } from "@/modules/registry";
 import { suspendedEmail } from "./billing-emails";
 import { logAdminAction } from "./data";
-import { requirePlatformAdmin } from "./guard";
+import { platformAdminEmails, requirePlatformAdmin } from "./guard";
 
 /**
  * Platform admin actions. Every one checks, on the server, that the caller is
@@ -373,4 +373,106 @@ export async function leaveSupport(): Promise<void> {
   jar.delete(SUPPORT_COOKIE);
   jar.delete(ACTIVE_BUSINESS_COOKIE);
   redirect("/admin");
+}
+
+// ---------------------------------------------------------------------
+// Deleting (permanent, for test companies and accounts)
+// ---------------------------------------------------------------------
+/** Every stored file belonging to a company. */
+async function filesUnder(prefix: string): Promise<string[]> {
+  const db = createAdminClient();
+  const out: string[] = [];
+  const walk = async (path: string) => {
+    const { data } = await db.storage.from("tenant-files").list(path, { limit: 1000 });
+    for (const entry of data ?? []) {
+      const child = `${path}/${entry.name}`;
+      if (entry.id) out.push(child);
+      else await walk(child);
+    }
+  };
+  await walk(prefix);
+  return out;
+}
+
+const deleteBusinessSchema = z.object({ businessId: id, confirmName: z.string().trim().min(1), reason });
+
+/** Deletes a company and everything in it. Cannot be undone. */
+export async function deleteBusiness(input: unknown): Promise<ActionResult> {
+  const admin = await requirePlatformAdmin();
+  const p = deleteBusinessSchema.safeParse(input);
+  if (!p.success) return { error: p.error.issues[0].message };
+  const d = p.data;
+  const b = await loadBusiness(d.businessId);
+  if (d.confirmName.toLowerCase() !== b.name.toLowerCase()) return { error: `Type the company name exactly (${b.name}) to confirm.` };
+  const db = createAdminClient();
+  const { data: before } = await db.from("businesses").select("id, name, slug, created_at, plan_status, paid_until, trial_ends_at").eq("id", b.id).single();
+  const { count: staff } = await db.from("employees").select("id", { count: "exact", head: true }).eq("business_id", b.id);
+  // Log first: the log keeps the company name after the company is gone.
+  await logAdminAction(admin, {
+    action: "business.delete",
+    businessId: b.id,
+    businessName: b.name,
+    reason: d.reason,
+    before: { ...before, staff_count: staff ?? 0 },
+    after: null,
+  });
+  const files = await filesUnder(b.id);
+  if (files.length) await db.storage.from("tenant-files").remove(files);
+  const { error } = await db.from("businesses").delete().eq("id", b.id);
+  if (error) return { error: error.message };
+  revalidatePath("/admin/businesses");
+  revalidatePath("/admin");
+  return { ok: true, message: `${b.name} deleted, with ${staff ?? 0} staff records and ${files.length} files.` };
+}
+
+const deleteAccountSchema = z.object({ userId: id, confirmEmail: z.string().trim().email(), reason });
+
+/** Deletes a login. Refused if they're the only owner of a company (delete that company first). */
+export async function deleteAccount(input: unknown): Promise<ActionResult> {
+  const admin = await requirePlatformAdmin();
+  const p = deleteAccountSchema.safeParse(input);
+  if (!p.success) return { error: p.error.issues[0].message };
+  const d = p.data;
+  if (d.userId === admin.id) return { error: "You can't delete the account you're signed in with." };
+  const db = createAdminClient();
+  const { data: user, error: findErr } = await db.auth.admin.getUserById(d.userId);
+  if (findErr || !user?.user?.email) return { error: "That account no longer exists." };
+  const email = user.user.email;
+  if (d.confirmEmail.toLowerCase() !== email.toLowerCase()) return { error: `Type the email exactly (${email}) to confirm.` };
+  if (platformAdminEmails().includes(email.toLowerCase())) {
+    return { error: "That's a Harbor admin account. Take the email out of PLATFORM_ADMIN_EMAILS on Vercel first." };
+  }
+
+  // Companies where this account is the only owner must go first.
+  const { data: memberships } = await db.from("business_members").select("business_id, status, businesses(name), roles(is_owner)").eq("user_id", d.userId);
+  const rows = (memberships ?? []) as unknown as { business_id: string; status: string; businesses: { name: string } | null; roles: { is_owner: boolean } | null }[];
+  const blocking: string[] = [];
+  for (const m of rows) {
+    if (!m.roles?.is_owner) continue;
+    const { count } = await db
+      .from("business_members")
+      .select("id, roles!inner(is_owner)", { count: "exact", head: true })
+      .eq("business_id", m.business_id)
+      .eq("status", "active")
+      .eq("roles.is_owner", true)
+      .neq("user_id", d.userId);
+    if (!count) blocking.push(m.businesses?.name ?? "a company");
+  }
+  if (blocking.length) {
+    return {
+      error: `This account is the only owner of ${blocking.join(", ")}. Delete ${blocking.length === 1 ? "that company" : "those companies"} first, or make someone else the owner.`,
+    };
+  }
+
+  await logAdminAction(admin, {
+    action: "account.delete",
+    reason: d.reason,
+    before: { email, name: user.user.user_metadata?.full_name ?? null, companies: rows.map((m) => m.businesses?.name).filter(Boolean) },
+    after: null,
+  });
+  const { error } = await db.auth.admin.deleteUser(d.userId);
+  if (error) return { error: error.message };
+  revalidatePath("/admin/accounts");
+  revalidatePath("/admin/businesses");
+  return { ok: true, message: `${email} deleted.` };
 }

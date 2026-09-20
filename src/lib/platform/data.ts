@@ -109,4 +109,6 @@ export const ADMIN_ACTION_LABEL: Record<string, string> = {
   "note.add": "Added note",
   "support.enter": "Opened workspace as support",
   "export.businesses": "Exported companies list",
+  "business.delete": "Deleted company",
+  "account.delete": "Deleted login",
 };

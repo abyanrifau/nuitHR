@@ -172,7 +172,7 @@ Open **http://localhost:3000/setup** in your browser. Every line should have a g
 | Permits & renewals | `/app/permits` | rights to see permits |
 | Staff app: My tasks | `/staff/tasks` | Joiners & leavers switched on |
 | Billing (plan, paid-until date, payments, how to pay) | `/app/workspace/billing` | the company owner |
-| Platform admin (Harbor's own admin area; hidden) | `/admin`, `/admin/businesses`, `/admin/businesses/<company>`, `/admin/activity` | your email in `PLATFORM_ADMIN_EMAILS`, confirmed, with two-step sign-in |
+| Platform admin (Harbor's own admin area; hidden) | `/admin`, `/admin/businesses`, `/admin/businesses/<company>`, `/admin/accounts`, `/admin/activity` | your email in `PLATFORM_ADMIN_EMAILS`, confirmed, with two-step sign-in |
 | Training (courses) | `/app/training` | rights to manage courses |
 | New course | `/app/training/new` | rights to manage courses |
 | A course (lessons, quiz questions, who takes it, progress) | `/app/training/<course>` | rights to manage courses |
@@ -352,6 +352,8 @@ Everyone else gets an ordinary "page not found", so nobody can tell the area exi
     - Email the owner.
     - Add a private note.
     - Open their workspace as support: only when the company has switched on support access, view only, never pay data.
+- **Logins:** every account that has signed up, with the companies they belong to, and a **Delete** button for test accounts. A login that is the only owner of a company can't be deleted until that company is deleted (or someone else is made owner). Deleting a login removes the sign-in only; the person's staff record stays with the company.
+- **Deleting a company:** at the bottom of a company's page. It permanently removes the company, all its records and its uploaded files, after you type the company name and a reason. It cannot be undone; the admin log keeps a record.
 - **Admin log:** every action, with who, what, which company, why, and the values before and after.
 
 **Subscriptions:**

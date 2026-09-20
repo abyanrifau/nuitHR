@@ -121,6 +121,25 @@ describe("support access", () => {
   });
 });
 
+describe("the list of logins", () => {
+  it("is refused to signed-in users and shows companies with the server key", async () => {
+    await expect(asUser(db, f.users.ownerA, (tx) => tx.query(`select public.admin_accounts()`))).rejects.toThrow(/permission denied|Not allowed/);
+    const r = await asService(db, (tx) =>
+      one<{ r: { id: string; email: string; memberships: { business_id: string; is_owner: boolean }[] }[] }>(tx, `select public.admin_accounts() as r`),
+    );
+    const owner = r.r.find((u) => u.id === f.users.ownerA)!;
+    expect(owner.memberships.some((m) => m.business_id === f.bizA && m.is_owner)).toBe(true);
+    expect(JSON.stringify(r.r)).not.toMatch(/encrypted_password|basic_salary/);
+  });
+
+  it("deleting a login leaves the company and its staff record in place", async () => {
+    const before = await q(`select 1 from public.employees where business_id = $1`, [f.bizA]);
+    await db.query(`delete from auth.users where id = $1`, [f.users.staffA]);
+    expect(await q(`select 1 from public.employees where business_id = $1`, [f.bizA])).toHaveLength(before.length);
+    expect(await q(`select 1 from public.business_members where user_id = $1`, [f.users.staffA])).toHaveLength(0);
+  });
+});
+
 describe("deleting a company", () => {
   it("works even with admin log entries, which keep the company name", async () => {
     const [b] = await q<{ id: string }>(`insert into public.businesses (name, slug, industry, country, currency, timezone, date_format) values ('Gone Cafe', 'gone-cafe', 'resort', 'MV', 'MVR', 'Indian/Maldives', 'DD/MM/YYYY') returning id`);
