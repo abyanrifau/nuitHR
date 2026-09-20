@@ -39,10 +39,22 @@ export function requireSupabasePublicEnv(): { url: string; key: string } {
  * missing on Vercel.
  */
 export function siteUrl(): string {
-  const explicit = process.env.NEXT_PUBLIC_SITE_URL;
-  if (explicit) return explicit.replace(/\/$/, "");
   const configured = appConfig.brand.siteUrl?.trim().replace(/\/$/, "");
-  if (configured && process.env.NODE_ENV === "production") return configured;
+  const explicit = process.env.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/$/, "");
+  // A setting left over from before the domain was connected (a *.vercel.app
+  // address) is ignored, so links and redirects never point away from the
+  // real address in src/config/app.config.ts.
+  const stale = !!explicit && !!configured && isVercelPreviewAddress(explicit);
+  if (explicit && !stale) return explicit;
+  if (configured && (stale || process.env.NODE_ENV === "production")) return configured;
   if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
   return "http://localhost:3000";
+}
+
+function isVercelPreviewAddress(value: string): boolean {
+  try {
+    return new URL(value).host.endsWith(".vercel.app");
+  } catch {
+    return false;
+  }
 }

@@ -31,3 +31,17 @@ describe("the web address used in links", () => {
     expect(await load()).toBe("http://localhost:3000");
   });
 });
+
+describe("a leftover setting from before the domain was connected", () => {
+  it("is ignored when it points at a vercel.app address", async () => {
+    vi.resetModules();
+    process.env.NEXT_PUBLIC_SITE_URL = "https://nuithr.vercel.app";
+    expect((await import("../src/lib/env")).siteUrl()).toBe("https://harbor.nuit.works");
+  });
+
+  it("is still used for any other address", async () => {
+    vi.resetModules();
+    process.env.NEXT_PUBLIC_SITE_URL = "https://app.example.com";
+    expect((await import("../src/lib/env")).siteUrl()).toBe("https://app.example.com");
+  });
+});
