@@ -14,6 +14,8 @@ export interface EmailMessage {
   subject: string;
   html: string;
   text: string;
+  /** Files sent with the email, such as a payslip PDF. */
+  attachments?: { filename: string; content: Uint8Array }[];
 }
 
 export interface SendResult {
@@ -38,7 +40,14 @@ const resend: EmailProvider = {
       const res = await fetch("https://api.resend.com/emails", {
         method: "POST",
         headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ from: from(), to: [m.to], subject: m.subject, html: m.html, text: m.text }),
+        body: JSON.stringify({
+          from: from(),
+          to: [m.to],
+          subject: m.subject,
+          html: m.html,
+          text: m.text,
+          ...(m.attachments?.length ? { attachments: m.attachments.map((a) => ({ filename: a.filename, content: Buffer.from(a.content).toString("base64") })) } : {}),
+        }),
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { message?: string };
@@ -54,7 +63,8 @@ const resend: EmailProvider = {
 const consoleProvider: EmailProvider = {
   name: "console",
   async send(m) {
-    console.info(`\n[email] To: ${m.to}\n[email] Subject: ${m.subject}\n${m.text}\n`);
+    const files = m.attachments?.length ? `\n[email] Attached: ${m.attachments.map((a) => `${a.filename} (${Math.round(a.content.length / 1024)} KB)`).join(", ")}` : "";
+    console.info(`\n[email] To: ${m.to}\n[email] Subject: ${m.subject}${files}\n${m.text}\n`);
     return { ok: true, provider: "console" };
   },
 };

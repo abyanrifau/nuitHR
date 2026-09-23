@@ -18,6 +18,7 @@ const STATUS: Record<string, { label: string; tone: "success" | "warning" | "dan
   present: { label: "Present", tone: "success" },
   late: { label: "Late", tone: "warning" },
   half_day: { label: "Half day", tone: "warning" },
+  early_leave: { label: "Left early", tone: "warning" },
   absent: { label: "Absent", tone: "danger" },
   on_leave: { label: "On leave", tone: "info" },
   holiday: { label: "Holiday", tone: "neutral" },
@@ -45,7 +46,7 @@ export default async function TimePage(props: PageProps<"/app/time">) {
     supabase.from("employees").select("id, first_name, last_name, employee_code").eq("business_id", active.business_id).in("status", ["active", "probation", "on_leave"]).order("first_name").limit(3000),
     supabase
       .from("attendance_records")
-      .select("id, employee_id, clock_in_at, clock_out_at, worked_minutes, late_minutes, overtime_minutes, break_minutes, status, is_flagged, flag_reason, shift_id, notes, source")
+      .select("id, employee_id, clock_in_at, clock_out_at, worked_minutes, late_minutes, overtime_minutes, break_minutes, status, is_flagged, flag_reason, shift_id, notes, source, is_half_day")
       .eq("business_id", active.business_id)
       .eq("work_date", day),
     supabase.from("roster_entries").select("employee_id, is_rest_day, shift:shifts(name, start_time, end_time)").eq("business_id", active.business_id).eq("work_date", day),
@@ -77,12 +78,17 @@ export default async function TimePage(props: PageProps<"/app/time">) {
         description="Who's in, who's late and who hasn't arrived. Staff clock in from the staff app; you can add or fix a day here."
         actions={
           <>
-            <Link href="/app/time/roster" className={buttonClasses({ variant: "secondary" })}>
-              Roster
+            <Link href="/app/time/schedules" className={buttonClasses({ variant: "secondary" })}>
+              Work schedules
             </Link>
             {can(ctx, "attendance", "edit") && (
-              <Link href="/app/time/timesheets" className={buttonClasses({ variant: "secondary" })}>
-                Timesheets
+              <Link href="/app/time/import" className={buttonClasses({ variant: "secondary" })}>
+                Import from clock machine
+              </Link>
+            )}
+            {can(ctx, "attendance", "edit", "all") && (
+              <Link href="/app/time/rules" className={buttonClasses({ variant: "secondary" })}>
+                Rules
               </Link>
             )}
           </>
@@ -194,8 +200,9 @@ export default async function TimePage(props: PageProps<"/app/time">) {
                                 clock_in: time(rec.clock_in_at),
                                 clock_out: time(rec.clock_out_at),
                                 shift_id: rec.shift_id,
-                                status: ["absent", "on_leave", "holiday", "rest_day"].includes(rec.status) ? rec.status : "auto",
+                                status: !rec.clock_in_at && ["absent", "on_leave", "holiday", "rest_day"].includes(rec.status) ? rec.status : "auto",
                                 notes: rec.notes,
+                                is_half_day: rec.is_half_day,
                               }
                             : null
                         }

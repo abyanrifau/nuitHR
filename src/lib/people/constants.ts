@@ -21,10 +21,15 @@ export const CONTRACT_TYPES = [
 ];
 
 export const GENDERS = [
-  { value: "female", label: "Female" },
   { value: "male", label: "Male" },
-  { value: "other", label: "Other" },
-  { value: "undisclosed", label: "Prefer not to say" },
+  { value: "female", label: "Female" },
+];
+
+export const MARITAL_STATUSES = [
+  { value: "Single", label: "Single" },
+  { value: "Married", label: "Married" },
+  { value: "Divorced", label: "Divorced" },
+  { value: "Widowed", label: "Widowed" },
 ];
 
 export const EXIT_REASONS = [

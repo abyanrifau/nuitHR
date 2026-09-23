@@ -176,10 +176,11 @@ describe("navigation adapts to switched-on tools", () => {
   const owner = (modules: string[]): AccessContext => ({ isOwner: true, modules: normalizeSelection(modules), permissions: [] });
   const hrefs = (ctx: AccessContext) => adminNavigation(ctx).flatMap((s) => s.items.map((i) => i.href));
 
-  it("orders the sidebar Home, Requests, stages, then Workspace", () => {
-    const sections = adminNavigation(owner(["attendance", "payroll"]));
-    expect(sections.map((s) => s.key)).toEqual(["home", "run", "pay", "workspace"]);
-    expect(sections[0].items.slice(0, 2).map((i) => i.label)).toEqual(["Home", "Requests"]);
+  it("orders the sidebar Home and Requests, People, stages, then Workspace", () => {
+    const sections = adminNavigation(owner(["attendance", "payroll", "claims"]));
+    expect(sections.map((s) => s.key)).toEqual(["home", "people", "run", "pay", "workspace"]);
+    expect(sections[0].items.map((i) => i.label)).toEqual(["Home", "Requests"]);
+    expect(sections.find((s) => s.key === "pay")!.items.map((i) => i.label)).toEqual(["Payroll", "Salaries", "Allowances & deductions", "Payroll reports", "Claims"]);
     expect(sections.at(-1)!.items.map((i) => i.label)).toContain("Tools");
   });
 
@@ -203,6 +204,9 @@ describe("navigation adapts to switched-on tools", () => {
       "/app/letters",
       "/app/news",
       "/app/payroll",
+      "/app/payroll/salaries",
+      "/app/payroll/allowances",
+      "/app/payroll/reports",
       "/app/workspace/tools",
       "/app/workspace/people",
       "/app/workspace/requests",

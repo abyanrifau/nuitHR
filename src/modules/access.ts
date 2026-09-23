@@ -53,15 +53,15 @@ export function enabledModules(ctx: Pick<AccessContext, "modules">): ModuleDefin
   return MODULES.filter((m) => m.core || ctx.modules.includes(m.key));
 }
 
-function allowed(ctx: AccessContext, item: { requires?: { resource: string; action: PermissionAction }; ownerOnly?: boolean }) {
+function allowed(ctx: AccessContext, item: { requires?: { resource: string; action: PermissionAction; scope?: PermissionScope }; ownerOnly?: boolean }) {
   if (item.ownerOnly && !ctx.isOwner) return false;
-  return !item.requires || can(ctx, item.requires.resource, item.requires.action);
+  return !item.requires || can(ctx, item.requires.resource, item.requires.action, item.requires.scope);
 }
 
 export type NavItemWithTool = NavItem & { moduleKey: ModuleKey };
 
 export interface NavSection {
-  key: "home" | ToolStage | "workspace";
+  key: "home" | "people" | ToolStage | "workspace";
   label: string | null;
   items: NavItemWithTool[];
 }
@@ -79,18 +79,15 @@ export function adminNavigation(ctx: AccessContext, opts: { onlyBuilt?: boolean 
       .flatMap((m) => m.nav.filter((n) => allowed(ctx, n)).map((n) => ({ ...n, moduleKey: m.key })))
       .filter((n) => !opts.onlyBuilt || isRouteAvailable(n.href));
 
-  const top: NavSection = {
-    key: "home",
-    label: null,
-    items: [...items(["dashboard"]), ...items(["approvals"]), ...items(["employees", "documents", "portal"])],
-  };
+  const top: NavSection = { key: "home", label: null, items: [...items(["dashboard"]), ...items(["approvals"])] };
+  const people: NavSection = { key: "people", label: "People", items: items(["employees", "documents", "portal"]) };
   const stages: NavSection[] = STAGES.filter((s) => s.key !== "foundation").map((s) => ({
     key: s.key,
     label: s.label,
     items: items(mods.filter((m) => m.category === s.key).map((m) => m.key)),
   }));
   const workspace: NavSection = { key: "workspace", label: "Workspace", items: items(["system"]) };
-  return [top, ...stages, workspace].filter((s) => s.items.length > 0);
+  return [top, people, ...stages, workspace].filter((s) => s.items.length > 0);
 }
 
 /** Staff app items (bottom tabs Home, Time, Requests, Pay, Me, plus extras). */

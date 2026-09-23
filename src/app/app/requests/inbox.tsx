@@ -4,6 +4,7 @@ import { useOptimistic, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Check, X } from "lucide-react";
+import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
@@ -23,6 +24,7 @@ export interface InboxItem {
   step_order: number;
   total_steps: number;
   via: "you" | "role" | "stand-in" | "admin";
+  employee_photo: string | null;
 }
 
 type Item = InboxItem & { when: string; amountText: string | null; typeLabel: string };
@@ -94,6 +96,7 @@ export function Inbox({ items: loaded }: { items: Item[] }) {
         {items.map((i) => (
           <li key={i.id} className="flex flex-wrap items-start gap-3 px-4 py-4 sm:flex-nowrap">
             <input type="checkbox" className="mt-1" checked={selected.has(i.id)} onChange={() => toggle(i.id)} aria-label={`Select ${i.title}`} />
+            <Avatar name={i.employee_name || i.requested_by_name} path={i.employee_photo} size="md" />
             <div className="min-w-0 flex-1">
               <p className="text-foreground">{i.title}</p>
               <p className="text-[13px] text-muted-foreground">
@@ -111,7 +114,7 @@ export function Inbox({ items: loaded }: { items: Item[] }) {
                 {VIA[i.via] && <Badge>{VIA[i.via]}</Badge>}
               </p>
             </div>
-            <div className="flex w-full gap-2 pl-7 sm:w-auto sm:pl-0">
+            <div className="flex w-full gap-2 pl-[4.25rem] sm:w-auto sm:pl-0">
               <Button size="sm" variant="secondary" disabled={pending} onClick={() => decide([i.id], "approve")}>
                 <Check className="size-3.5" aria-hidden /> Approve
               </Button>

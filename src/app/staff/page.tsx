@@ -3,6 +3,8 @@ import { ChevronRight, Pin } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { InstallPrompt } from "@/components/staff/install";
 import { getStaffContext, getStaffProfile } from "@/lib/staff/context";
+import { localDay } from "@/lib/format";
+import { Celebrations } from "@/components/people/celebrations";
 import { formatDateTime } from "@/lib/format";
 import { ModuleIcon } from "@/modules/icons";
 import { portalNavigation } from "@/modules/access";
@@ -69,6 +71,8 @@ export default async function StaffHome() {
           )}
         </section>
       )}
+
+      <Celebrations businessId={active.business_id} dateFormat={active.date_format} today={localDay(new Date(), active.timezone)} newsHref="/staff" showNews={false} />
 
       {extras.length > 0 && (
         <section aria-labelledby="quick">

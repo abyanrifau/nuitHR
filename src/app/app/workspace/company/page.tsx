@@ -10,6 +10,7 @@ import { countryOptions, currencyOptions, DATE_FORMATS, timezoneOptions } from "
 import { INDUSTRIES } from "@/modules/selection";
 import { can } from "@/modules/access";
 import { cn } from "@/lib/utils";
+import { CelebrationsSetting } from "@/components/people/celebrations-setting";
 import { BrandingPanel, DetailsForm } from "./company-forms";
 
 export const metadata: Metadata = { title: "Company settings" };
@@ -68,14 +69,23 @@ export default async function CompanySettingsPage(props: PageProps<"/app/workspa
             dateFormats: DATE_FORMATS,
           }}
         />
-      ) : (
+      ) : null}
+      {tab === "details" && (
+        <section aria-labelledby="home-page" className="mt-12">
+          <h2 id="home-page" className="mb-4 text-lg">
+            Home page
+          </h2>
+          <CelebrationsSetting enabled={b.celebrations_enabled} canEdit={canEdit} />
+        </section>
+      )}
+      {tab === "branding" ? (
         <BrandingPanel
           canEdit={canEdit}
           businessId={active.business_id}
           images={{ logo: url(b.logo_path), signature: url(b.signature_path), stamp: url(b.stamp_path) }}
           letterhead={{ signatory_name: b.signatory_name, signatory_title: b.signatory_title, letterhead_footer: b.letterhead_footer }}
         />
-      )}
+      ) : null}
       <section aria-labelledby="about-harbor" className="mt-12 border-t border-border pt-6">
         <h2 id="about-harbor" className="section-label mb-2">
           about {appConfig.brand.name.toLowerCase()}

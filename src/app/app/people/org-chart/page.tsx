@@ -5,7 +5,8 @@ import { EmptyState, PageHeader } from "@/components/ui/page";
 import { buttonClasses } from "@/components/ui/button";
 import { getActiveBusiness, toAccessContext } from "@/lib/auth/session";
 import { createClient } from "@/lib/supabase/server";
-import { fullName, initials } from "@/lib/format";
+import { Avatar } from "@/components/ui/avatar";
+import { fullName } from "@/lib/format";
 import { can } from "@/modules/access";
 import { cn } from "@/lib/utils";
 import { StructureEditor } from "./structure-editor";
@@ -15,6 +16,7 @@ export const metadata: Metadata = { title: "Org chart" };
 interface Person {
   id: string;
   first_name: string;
+  photo_path: string | null;
   last_name: string;
   preferred_name: string | null;
   manager_id: string | null;
@@ -90,7 +92,7 @@ export default async function OrgChartPage(props: PageProps<"/app/people/org-cha
     const [{ data: people }, { data: departments }] = await Promise.all([
       supabase
         .from("employees")
-        .select("id, first_name, last_name, preferred_name, manager_id, department_id, position:positions(title)")
+        .select("id, first_name, last_name, preferred_name, photo_path, manager_id, department_id, position:positions(title)")
         .eq("business_id", businessId)
         .in("status", ["active", "probation", "on_leave", "suspended"])
         .limit(3000),
@@ -118,7 +120,7 @@ export default async function OrgChartPage(props: PageProps<"/app/people/org-cha
     const Card = ({ n }: { n: Node }) => {
       const inner = (
         <>
-          <span className="grid size-8 shrink-0 place-items-center rounded-full border border-border text-[11px] text-muted-foreground">{initials(n)}</span>
+          <Avatar name={fullName(n)} path={n.photo_path} size="sm" />
           <span className="min-w-0">
             <span className="block truncate text-sm text-foreground">{fullName(n)}</span>
             <span className="block truncate text-[12px] text-subtle-foreground">

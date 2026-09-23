@@ -90,3 +90,16 @@ export async function setBrandingImage(kind: keyof typeof IMAGE_COLUMNS, path: s
   revalidatePath("/app", "layout");
   return { ok: true, message: path ? "Image saved." : "Image removed." };
 }
+
+/** Switches the Celebrations card on Home on or off for everyone in the company. */
+export async function setCelebrationsEnabled(enabled: boolean): Promise<ActionResult> {
+  await requireUser();
+  const active = await getActiveBusiness();
+  if (!active) return { error: "Choose a company first." };
+  const supabase = await createClient();
+  const { data, error } = await supabase.from("businesses").update({ celebrations_enabled: enabled }).eq("id", active.business_id).select("id");
+  if (error) return { error: friendly(error.message) };
+  if (!data?.length) return { error: "Only people who can change company settings can do this." };
+  revalidatePath("/", "layout");
+  return { ok: true, message: enabled ? "Celebrations are on." : "Celebrations are off." };
+}

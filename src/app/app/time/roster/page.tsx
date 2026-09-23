@@ -47,7 +47,8 @@ export default async function RosterPage(props: PageProps<"/app/time/roster">) {
     .order("first_name")
     .limit(500);
   if (sp.department) peopleQ = peopleQ.eq("department_id", sp.department);
-  const [{ data: b }, { data: people }, { data: allEntries }, { data: shifts }, { data: departments }, { data: allLeave }, { data: allHolidays }] = await Promise.all([
+  if (sp.branch) peopleQ = peopleQ.eq("branch_id", sp.branch);
+  const [{ data: b }, { data: people }, { data: allEntries }, { data: shifts }, { data: departments }, { data: allLeave }, { data: allHolidays }, { data: branches }] = await Promise.all([
     supabase.from("businesses").select("week_start, working_days").eq("id", active.business_id).single(),
     peopleQ,
     supabase.from("roster_entries").select("employee_id, work_date, shift_id, is_rest_day, published").eq("business_id", active.business_id).gte("work_date", from).lte("work_date", to),
@@ -55,6 +56,7 @@ export default async function RosterPage(props: PageProps<"/app/time/roster">) {
     supabase.from("departments").select("id, name").eq("business_id", active.business_id).eq("is_active", true).order("name"),
     supabase.from("leave_requests").select("employee_id, start_date, end_date").eq("business_id", active.business_id).eq("status", "approved").lte("start_date", to).gte("end_date", from),
     supabase.from("public_holidays").select("holiday_date, name").eq("business_id", active.business_id).gte("holiday_date", from).lte("holiday_date", to),
+    supabase.from("branches").select("id, name").eq("business_id", active.business_id).order("name"),
   ]);
   const start = weekStartOf(anchor, b?.week_start ?? 0);
   const end = addDays(start, 6);
@@ -64,7 +66,12 @@ export default async function RosterPage(props: PageProps<"/app/time/roster">) {
   const holidays = (allHolidays ?? []).filter((h) => h.holiday_date >= start && h.holiday_date <= end);
   const canEdit = can(ctx, "roster", "edit", "team") || can(ctx, "roster", "create", "team");
   const unpublished = (entries ?? []).filter((e) => !e.published).length;
-  const href = (week: string) => `/app/time/roster?week=${week}${sp.department ? `&department=${sp.department}` : ""}`;
+  const qs = (week: string, extra: { department?: string | null; branch?: string | null } = {}) => {
+    const dept = "department" in extra ? extra.department : sp.department;
+    const br = "branch" in extra ? extra.branch : sp.branch;
+    return `/app/time/roster?week=${week}${dept ? `&department=${dept}` : ""}${br ? `&branch=${br}` : ""}`;
+  };
+  const href = (week: string) => qs(week);
 
   return (
     <div>
@@ -85,16 +92,28 @@ export default async function RosterPage(props: PageProps<"/app/time/roster">) {
         </Link>
         {departments && departments.length > 0 && (
           <span className="flex flex-wrap gap-2 text-[13px]">
-            <Link href={`/app/time/roster?week=${start}`} className={`rounded-full border px-3 py-1 ${!sp.department ? "border-foreground" : "border-border text-muted-foreground"}`}>
-              Everyone
+            <Link href={qs(start, { department: null })} className={`rounded-full border px-3 py-1 ${!sp.department ? "border-foreground" : "border-border text-muted-foreground"}`}>
+              All teams
             </Link>
             {departments.map((d) => (
               <Link
                 key={d.id}
-                href={`/app/time/roster?week=${start}&department=${d.id}`}
+                href={qs(start, { department: d.id })}
                 className={`rounded-full border px-3 py-1 ${sp.department === d.id ? "border-foreground" : "border-border text-muted-foreground"}`}
               >
                 {d.name}
+              </Link>
+            ))}
+          </span>
+        )}
+        {branches && branches.length > 1 && (
+          <span className="flex flex-wrap gap-2 text-[13px]">
+            <Link href={qs(start, { branch: null })} className={`rounded-full border px-3 py-1 ${!sp.branch ? "border-foreground" : "border-border text-muted-foreground"}`}>
+              All locations
+            </Link>
+            {branches.map((br) => (
+              <Link key={br.id} href={qs(start, { branch: br.id })} className={`rounded-full border px-3 py-1 ${sp.branch === br.id ? "border-foreground" : "border-border text-muted-foreground"}`}>
+                {br.name}
               </Link>
             ))}
           </span>
@@ -116,7 +135,7 @@ export default async function RosterPage(props: PageProps<"/app/time/roster">) {
         <EmptyState title="Nobody to roster" description="Add people first." />
       ) : (
         <RosterGrid
-          key={`${start}-${sp.department ?? ""}`}
+          key={`${start}-${sp.department ?? ""}-${sp.branch ?? ""}`}
           canEdit={canEdit}
           days={days.map((d) => ({
             date: d,

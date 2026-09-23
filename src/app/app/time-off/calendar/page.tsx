@@ -9,6 +9,8 @@ import { createClient } from "@/lib/supabase/server";
 import { localDay } from "@/lib/format";
 import { can } from "@/modules/access";
 import { cn } from "@/lib/utils";
+import { TimeOffTabs } from "../sections";
+import { AddEntryButton, EventChip, HolidayChip, type CalendarEvent, type CalendarHoliday } from "./calendar-client";
 
 export const metadata: Metadata = { title: "Time off calendar" };
 
@@ -43,12 +45,31 @@ export default async function TimeOffCalendar(props: PageProps<"/app/time-off/ca
     .in("status", sp.pending ? ["approved", "pending"] : ["approved"])
     .lte("start_date", iso(loadTo))
     .gte("end_date", iso(loadFrom));
-  const [{ data: b }, { data: leave }, { data: holidays }, { data: departments }] = await Promise.all([
+  const canEdit = can(ctx, "leave", "edit", "all");
+  const [{ data: b }, { data: leave }, { data: holidays }, { data: departments }, { data: events }, { data: branches }, { data: types }] = await Promise.all([
     supabase.from("businesses").select("week_start, working_days").eq("id", active.business_id).single(),
     (q = q.order("start_date")),
-    supabase.from("public_holidays").select("holiday_date, name").eq("business_id", active.business_id).gte("holiday_date", iso(loadFrom)).lte("holiday_date", iso(loadTo)),
+    supabase
+      .from("public_holidays")
+      .select("id, holiday_date, name, branch_id, is_optional")
+      .eq("business_id", active.business_id)
+      .gte("holiday_date", iso(loadFrom))
+      .lte("holiday_date", iso(loadTo))
+      .order("holiday_date"),
     supabase.from("departments").select("id, name").eq("business_id", active.business_id).eq("is_active", true).order("name"),
+    supabase
+      .from("company_events")
+      .select("id, title, kind, start_date, end_date, branch_id, leave_type_ids, notes")
+      .eq("business_id", active.business_id)
+      .lte("start_date", iso(loadTo))
+      .gte("end_date", iso(loadFrom))
+      .order("start_date"),
+    supabase.from("branches").select("id, name").eq("business_id", active.business_id).order("name"),
+    supabase.from("leave_types").select("id, name").eq("business_id", active.business_id).eq("is_active", true).order("sort").order("name"),
   ]);
+  const branchOpts = (branches ?? []).map((x) => ({ value: x.id, label: x.name }));
+  const typeOpts = (types ?? []).map((t) => ({ value: t.id, label: t.name }));
+  const eventList = (events ?? []) as CalendarEvent[];
   const weekStart = b?.week_start ?? 0;
   // Grid from the start of the week containing the 1st to the end of the week containing the last day.
   const gridStart = new Date(first.getTime() - ((first.getUTCDay() - weekStart + 7) % 7) * 86400000);
@@ -58,7 +79,7 @@ export default async function TimeOffCalendar(props: PageProps<"/app/time-off/ca
   const rows = (leave ?? [])
     .map((l) => ({ ...l, e: l.employee as unknown as { first_name: string; last_name: string; department_id: string | null }, t: l.type as unknown as { name: string; color: string } }))
     .filter((l) => !sp.department || l.e.department_id === sp.department);
-  const holidayOn = new Map((holidays ?? []).map((h) => [h.holiday_date, h.name]));
+  const holidayList = (holidays ?? []) as CalendarHoliday[];
   const workDays = new Set<number>((b?.working_days as number[]) ?? [0, 1, 2, 3, 4]);
   const labels = Array.from({ length: 7 }, (_, i) =>
     new Intl.DateTimeFormat("en-GB", { weekday: "short", timeZone: "UTC" }).format(new Date(Date.UTC(2024, 0, 7 + ((weekStart + i) % 7)))),
@@ -70,7 +91,17 @@ export default async function TimeOffCalendar(props: PageProps<"/app/time-off/ca
 
   return (
     <div>
-      <PageHeader back={{ href: "/app/time-off", label: "Time off" }} title="Time off calendar" description="Who's off each day, so you can spot clashes before you approve." />
+      <PageHeader
+        label="run"
+        title="Time off"
+        description={
+          canEdit
+            ? "Who's off each day, public holidays, company events and blackout dates. Use + on a day to add something, or click an entry to change it."
+            : "Who's off each day, public holidays, company events and blackout dates, so you can spot clashes before you approve."
+        }
+        actions={canEdit ? <AddEntryButton date={today.slice(0, 7) === month ? today : `${month}-01`} branches={branchOpts} types={typeOpts} label="Add to calendar" /> : undefined}
+      />
+      <TimeOffTabs current="calendar" canEdit={canEdit} />
       <div className="mb-5 flex flex-wrap items-center gap-2">
         <Link href={q2({ month: prev })} className={buttonClasses({ variant: "ghost", size: "sm" })} aria-label="Previous month">
           <ChevronLeft className="size-4" aria-hidden />
@@ -106,9 +137,26 @@ export default async function TimeOffCalendar(props: PageProps<"/app/time-off/ca
             const inMonth = d.slice(0, 7) === month;
             const rest = !workDays.has(new Date(`${d}T00:00:00Z`).getUTCDay());
             return (
-              <div key={d} className={cn("min-h-28 border-b border-l border-border p-1.5 first:border-l-0 [&:nth-child(7n+1)]:border-l-0", !inMonth && "opacity-40", rest && "bg-surface-muted/40")}>
-                <p className={cn("mb-1 text-[12px] tabular", d === today ? "font-display text-foreground" : "text-muted-foreground")}>{Number(d.slice(8))}</p>
-                {holidayOn.get(d) && <p className="mb-1 truncate text-[11px] text-info">{holidayOn.get(d)}</p>}
+              <div
+                key={d}
+                className={cn("group min-h-28 border-b border-l border-border p-1.5 first:border-l-0 [&:nth-child(7n+1)]:border-l-0", !inMonth && "opacity-40", rest && "bg-surface-muted/40")}
+              >
+                <div className="mb-1 flex items-center justify-between">
+                  <p className={cn("text-[12px] tabular", d === today ? "font-display text-foreground" : "text-muted-foreground")}>{Number(d.slice(8))}</p>
+                  {canEdit && <AddEntryButton date={d} branches={branchOpts} types={typeOpts} />}
+                </div>
+                <div className="mb-1 space-y-0.5">
+                  {holidayList
+                    .filter((h) => h.holiday_date === d)
+                    .map((h) => (
+                      <HolidayChip key={h.id} holiday={h} branches={branchOpts} canEdit={canEdit} />
+                    ))}
+                  {eventList
+                    .filter((e) => e.start_date <= d && e.end_date >= d)
+                    .map((e) => (
+                      <EventChip key={e.id} event={e} branches={branchOpts} types={typeOpts} canEdit={canEdit} />
+                    ))}
+                </div>
                 <ul className="space-y-0.5">
                   {off.slice(0, 4).map((r) => (
                     <li
@@ -127,6 +175,16 @@ export default async function TimeOffCalendar(props: PageProps<"/app/time-off/ca
           })}
         </div>
       </div>
+      <ul className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-subtle-foreground" aria-label="Key">
+        <li className="text-info">Public holiday</li>
+        <li>
+          <span className="rounded bg-accent-soft px-1.5 py-0.5 text-foreground">Company event</span>
+        </li>
+        <li>
+          <span className="rounded bg-danger-soft px-1.5 py-0.5 text-danger">Blackout: no time off</span>
+        </li>
+        <li>Names: approved time off (dashed: waiting)</li>
+      </ul>
     </div>
   );
 }

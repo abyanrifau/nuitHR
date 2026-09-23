@@ -56,6 +56,8 @@ if (cmd === "setup") {
   run("remove", state.email);
   const { error } = await admin.auth.admin.deleteUser(state.userId);
   if (error) throw error;
+  const { data: pics } = await admin.storage.from("avatars").list(`users/${state.userId}`);
+  if (pics?.length) await admin.storage.from("avatars").remove(pics.map((p) => `users/${state.userId}/${p.name}`));
   rmSync(stateFile);
   console.log(`Removed ${state.email}`);
 } else {

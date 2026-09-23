@@ -93,8 +93,8 @@ export const leaveSetupSchema = z.object({
         name: z.string().trim().min(1, "Enter a name.").max(60),
         days: z.coerce.number().min(0, "Can't be negative.").max(366),
         paid: z.boolean(),
-        accrual: z.enum(["upfront", "monthly", "yearly", "none"]),
-        carry_forward: z.coerce.number().min(0).max(366),
+        /** "upfront": a fixed number of days each leave year; "none": no limit. */
+        accrual: z.enum(["upfront", "none"]),
         gender: z.enum(["any", "female", "male"]),
         requires_document: z.boolean(),
       }),
@@ -209,7 +209,6 @@ export function defaultSetup<M extends SetupModule>(module: M, ctx: { industry: 
         days: l.days,
         paid: l.paid,
         accrual: l.accrual,
-        carry_forward: l.carryForward,
         gender: l.gender,
         requires_document: l.requiresDocument,
       })),

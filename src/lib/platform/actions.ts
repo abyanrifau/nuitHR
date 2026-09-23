@@ -378,12 +378,12 @@ export async function leaveSupport(): Promise<void> {
 // ---------------------------------------------------------------------
 // Deleting (permanent, for test companies and accounts)
 // ---------------------------------------------------------------------
-/** Every stored file belonging to a company. */
-async function filesUnder(prefix: string): Promise<string[]> {
+/** Every stored file under a folder (company files by default, or profile pictures). */
+async function filesUnder(prefix: string, bucket: "tenant-files" | "avatars" = "tenant-files"): Promise<string[]> {
   const db = createAdminClient();
   const out: string[] = [];
   const walk = async (path: string) => {
-    const { data } = await db.storage.from("tenant-files").list(path, { limit: 1000 });
+    const { data } = await db.storage.from(bucket).list(path, { limit: 1000 });
     for (const entry of data ?? []) {
       const child = `${path}/${entry.name}`;
       if (entry.id) out.push(child);
@@ -416,8 +416,9 @@ export async function deleteBusiness(input: unknown): Promise<ActionResult> {
     before: { ...before, staff_count: staff ?? 0 },
     after: null,
   });
-  const files = await filesUnder(b.id);
+  const [files, pictures] = await Promise.all([filesUnder(b.id), filesUnder(b.id, "avatars")]);
   if (files.length) await db.storage.from("tenant-files").remove(files);
+  if (pictures.length) await db.storage.from("avatars").remove(pictures);
   const { error } = await db.from("businesses").delete().eq("id", b.id);
   if (error) return { error: error.message };
   revalidatePath("/admin/businesses");
@@ -472,6 +473,8 @@ export async function deleteAccount(input: unknown): Promise<ActionResult> {
   });
   const { error } = await db.auth.admin.deleteUser(d.userId);
   if (error) return { error: error.message };
+  const pictures = await filesUnder(`users/${d.userId}`, "avatars");
+  if (pictures.length) await db.storage.from("avatars").remove(pictures);
   revalidatePath("/admin/accounts");
   revalidatePath("/admin/businesses");
   return { ok: true, message: `${email} deleted.` };

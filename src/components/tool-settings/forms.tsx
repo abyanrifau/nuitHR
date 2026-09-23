@@ -117,22 +117,22 @@ export function LeaveSetupForm({ initial }: FormProps<"leave">) {
         <CardHeader>
           <CardTitle>Leave types &amp; entitlements</CardTitle>
           <CardDescription>
-            Days per year for each type. These starting values follow common Maldives practice. Please check them against your contracts and the
-            Employment Act.
+            Days per leave year for each type, all given at the start of the year. Nothing carries over. These starting values follow common
+            Maldives practice. Please check them against your contracts and the Employment Act. Notice, who can use each type, documents and other
+            rules are in Time off, under Leave types.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="hidden grid-cols-[1fr_5rem_8rem_6rem_7rem_auto] gap-2 px-1 text-xs text-muted-foreground md:grid">
+          <div className="hidden grid-cols-[1fr_5rem_9rem_7rem_auto] gap-2 px-1 text-xs text-muted-foreground md:grid">
             <span>Leave type</span>
             <span>Days/year</span>
-            <span>How it builds up</span>
-            <span>Carry over</span>
+            <span>Balance</span>
             <span>Who</span>
             <span />
           </div>
           {types.map((t, i) => (
             <div key={i} className="rounded-lg border border-border p-3 md:border-0 md:p-0">
-              <div className="grid gap-2 md:grid-cols-[1fr_5rem_8rem_6rem_7rem_auto] md:items-center">
+              <div className="grid gap-2 md:grid-cols-[1fr_5rem_9rem_7rem_auto] md:items-center">
                 <Input aria-label="Leave type name" value={t.name} onChange={(e) => update(i, { name: e.target.value })} />
                 <Input
                   aria-label={`${t.name}: days per year`}
@@ -142,22 +142,13 @@ export function LeaveSetupForm({ initial }: FormProps<"leave">) {
                   onChange={(e) => update(i, { days: num(e.target.value) })}
                 />
                 <Select
-                  aria-label={`${t.name}: accrual`}
+                  aria-label={`${t.name}: balance`}
                   value={t.accrual}
                   onChange={(e) => update(i, { accrual: e.target.value as typeof t.accrual })}
                   options={[
-                    { value: "upfront", label: "All at once" },
-                    { value: "monthly", label: "Monthly" },
-                    { value: "yearly", label: "Yearly" },
-                    { value: "none", label: "No balance" },
+                    { value: "upfront", label: "Fixed days" },
+                    { value: "none", label: "No limit" },
                   ]}
-                />
-                <Input
-                  aria-label={`${t.name}: days carried over`}
-                  type="number"
-                  min={0}
-                  value={t.carry_forward}
-                  onChange={(e) => update(i, { carry_forward: num(e.target.value) })}
                 />
                 <Select
                   aria-label={`${t.name}: eligibility`}
@@ -193,7 +184,6 @@ export function LeaveSetupForm({ initial }: FormProps<"leave">) {
                   days: 0,
                   paid: true,
                   accrual: "upfront",
-                  carry_forward: 0,
                   gender: "any",
                   requires_document: false,
                 },

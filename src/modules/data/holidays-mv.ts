@@ -57,3 +57,11 @@ export function holidaySeeds(country: string, today = new Date()): HolidaySeed[]
   const year = today.getFullYear();
   return [...(MV[year] ?? []), ...(MV[year + 1] ?? [])].filter((h) => h.date >= `${year}-01-01`);
 }
+
+/** The Maldives holidays for one year (empty when that year isn't in the list yet). */
+export function maldivesHolidays(year: number): HolidaySeed[] {
+  return MV[year] ?? [];
+}
+
+/** Years the Maldives list covers. */
+export const MALDIVES_HOLIDAY_YEARS = Object.keys(MV).map(Number);

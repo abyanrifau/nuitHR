@@ -22,7 +22,14 @@ function refresh(run?: string) {
   if (run) revalidatePath(`/app/payroll/${run}`);
 }
 
-const runSchema = z.object({ start: date, end: date, pay_date: date, name: z.string().trim().max(80).optional() });
+const runSchema = z.object({
+  start: date,
+  end: date,
+  pay_date: date,
+  name: z.string().trim().max(80).optional(),
+  run_type: z.enum(["regular", "adhoc"]).default("regular"),
+  schedule: z.union([z.literal(""), uuid]).optional(),
+});
 
 export async function createRun(_: ActionResult, form: FormData): Promise<ActionResult & { id?: string }> {
   const active = await business();
@@ -30,14 +37,22 @@ export async function createRun(_: ActionResult, form: FormData): Promise<Action
   if (!parsed.success) return { error: parsed.error.issues[0].message, fieldErrors: parsed.error.flatten().fieldErrors };
   const d = parsed.data;
   const supabase = await createClient();
-  const { data, error } = await supabase.rpc("create_payroll_run", { p_business: active.business_id, p_start: d.start, p_end: d.end, p_pay_date: d.pay_date, p_name: d.name || null });
+  const { data, error } = await supabase.rpc("create_payroll_run", {
+    p_business: active.business_id,
+    p_start: d.start,
+    p_end: d.end,
+    p_pay_date: d.pay_date,
+    p_name: d.name || null,
+    p_schedule: d.schedule || null,
+    p_type: d.run_type,
+  });
   if (error) return { error: friendly(error.message) };
   const id = data as string;
   // Work it out straight away so there's something to check.
   const { error: calcErr } = await supabase.rpc("calculate_payroll_run", { p_run: id });
   refresh(id);
   if (calcErr) return { ok: true, id, message: `Pay run created, but it couldn't be calculated: ${friendly(calcErr.message)}` };
-  return { ok: true, id, message: "Pay run created and calculated." };
+  return { ok: true, id, message: d.run_type === "adhoc" ? "Ad-hoc run created. Add the amounts to pay on each person." : "Pay run created and calculated." };
 }
 
 async function rpc(name: string, args: Record<string, unknown>, run: string, message: string): Promise<ActionResult> {
@@ -66,6 +81,7 @@ const adjSchema = z.object({
   amount: z.coerce.number().positive("Enter an amount above zero.").max(10_000_000),
   taxable: z.coerce.boolean().optional(),
   pensionable: z.coerce.boolean().optional(),
+  reason: z.string().trim().min(3, "Add the reason. It's kept in the history.").max(300),
 });
 
 export async function addAdjustment(run: string, _: ActionResult, form: FormData): Promise<ActionResult> {
@@ -74,7 +90,7 @@ export async function addAdjustment(run: string, _: ActionResult, form: FormData
   const d = parsed.data;
   return rpc(
     "add_payroll_adjustment",
-    { p_run: run, p_employee: d.employee_id, p_name: d.name, p_kind: d.kind, p_amount: d.amount, p_taxable: d.taxable ?? false, p_pensionable: d.pensionable ?? false },
+    { p_run: run, p_employee: d.employee_id, p_name: d.name, p_kind: d.kind, p_amount: d.amount, p_taxable: d.taxable ?? false, p_pensionable: d.pensionable ?? false, p_reason: d.reason },
     run,
     "Added.",
   );
@@ -83,6 +99,14 @@ export async function addAdjustment(run: string, _: ActionResult, form: FormData
 export async function removeAdjustment(run: string, line: string): Promise<ActionResult> {
   if (!uuid.safeParse(line).success) return { error: "Not found." };
   return rpc("remove_payroll_adjustment", { p_line: line }, run, "Removed.");
+}
+
+export async function approveRun(run: string): Promise<ActionResult> {
+  return rpc("approve_payroll_run", { p_run: run }, run, "Approved. It can't change now unless you undo the approval.");
+}
+
+export async function unapproveRun(run: string): Promise<ActionResult> {
+  return rpc("unapprove_payroll_run", { p_run: run }, run, "Approval undone. You can change and calculate it again.");
 }
 
 export async function finalizeRun(run: string): Promise<ActionResult> {

@@ -92,8 +92,8 @@ export interface NavItem {
   label: string;
   href: string;
   icon: IconName;
-  /** Shown only if the user has this permission (any scope). */
-  requires?: { resource: string; action: PermissionAction };
+  /** Shown only if the user has this permission (any scope, unless a minimum scope is given). */
+  requires?: { resource: string; action: PermissionAction; scope?: PermissionScope };
   /** Shown only to the company's owners. */
   ownerOnly?: boolean;
 }

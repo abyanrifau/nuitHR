@@ -130,7 +130,8 @@ describe("quick setup (wizard step 4)", () => {
     expect(
       await n(`select 1 from public.tax_brackets tb join public.tax_tables t on t.id = tb.tax_table_id where tb.business_id = $1 and t.is_active`),
     ).toBe(5);
-    expect(await n(`select 1 from public.pay_components where business_id = $1`)).toBe(6);
+    // The 6 from the setup answers, plus the unapproved absence deduction every payroll company gets.
+    expect(await n(`select 1 from public.pay_components where business_id = $1`)).toBe(7);
     expect(await n(`select 1 from public.account_codes where business_id = $1 and mapping_key = 'net_pay_payable'`)).toBe(1);
     expect(await n(`select 1 from public.review_cycles where business_id = $1`)).toBe(1);
     expect(await n(`select 1 from public.review_questions where business_id = $1`)).toBe(5);

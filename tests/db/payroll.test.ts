@@ -35,10 +35,13 @@ beforeAll(async () => {
   );
   // Manager gets a fixed 2,000 allowance (pensionable, taxable).
   const comp = (await q<{ id: string }>(
-    `insert into public.pay_components (business_id, name, code, kind, category, calc_type, default_amount, is_taxable, is_pensionable) values ($1, 'Housing', 'HOUSE', 'earning', 'allowance', 'fixed', 2000, true, true) returning id`,
+    `insert into public.pay_components (business_id, name, code, kind, category, calc_type, default_amount, is_taxable, is_pensionable, applies_to) values ($1, 'Housing', 'HOUSE', 'earning', 'allowance', 'fixed', 2000, true, true, 'selected') returning id`,
     [f.bizA],
   ))[0].id;
   await db.query(`insert into public.employee_pay_components (business_id, employee_id, component_id, start_date) values ($1, $2, $3, '2024-01-01')`, [f.bizA, f.empA.M, comp]);
+  // Nobody here clocks in, so every working day would be an unapproved absence: switch that deduction off
+  // for these tests (tests/db/pay-items.test.ts covers it).
+  await db.query(`update public.pay_components set is_active = false where business_id = $1 and code = 'ABSENCE'`, [f.bizA]);
 });
 
 describe("pay runs", () => {
@@ -106,10 +109,32 @@ describe("pay runs", () => {
     expect(await line(run, f.empA.M, "LOAN")).toBe(1000);
   });
 
+  it("pays overtime only once it is approved, when the rules ask for approval", async () => {
+    await db.query(
+      `insert into public.attendance_policies (business_id, name, is_default, overtime_requires_approval)
+       values ($1, 'Needs approval', true, true)
+       on conflict (business_id) where is_default do update set overtime_requires_approval = true`,
+      [f.bizA],
+    );
+    await asUser(db, f.users.payrollA, (tx) => tx.query(`select public.calculate_payroll_run($1)`, [run]));
+    expect((await lines(run, f.empA.M)).some((l) => l.source === "overtime")).toBe(false);
+    const [rec] = await q<{ id: string }>(`select id from public.attendance_records where employee_id = $1 and work_date = '2026-06-08'`, [f.empA.M]);
+    await asUser(db, f.users.ownerA, (tx) => tx.query(`select public.decide_overtime($1, $2, 'approved')`, [f.bizA, [rec.id]]));
+    await asUser(db, f.users.payrollA, (tx) => tx.query(`select public.calculate_payroll_run($1)`, [run]));
+    expect((await lines(run, f.empA.M)).some((l) => l.source === "overtime" && Number(l.amount) > 0)).toBe(true);
+    await db.query(`update public.attendance_policies set overtime_requires_approval = false where business_id = $1`, [f.bizA]);
+  });
+
   it("keeps one-off adjustments when recalculating, and people on hold stay out of the totals", async () => {
-    await asUser(db, f.users.payrollA, (tx) => tx.query(`select public.add_payroll_adjustment($1, $2, 'Eid bonus', 'earning', 500)`, [run, f.empA.S2]));
+    await asUser(db, f.users.payrollA, (tx) => tx.query(`select public.add_payroll_adjustment($1, $2, 'Eid bonus', 'earning', 500, true, false, 'Eid gift for everyone')`, [run, f.empA.S2]));
     await asUser(db, f.users.payrollA, (tx) => tx.query(`select public.calculate_payroll_run($1)`, [run]));
     expect(await line(run, f.empA.S2, "ADJ")).toBe(500);
+    // A reason is needed, and the adjustment is kept in the history with it.
+    await expect(asUser(db, f.users.payrollA, (tx) => tx.query(`select public.add_payroll_adjustment($1, $2, 'Bonus', 'earning', 5)`, [run, f.empA.S2]))).rejects.toThrow(/reason/);
+    const log = await q<{ actor_id: string; changes: { reason: { to: string } } }>(`select actor_id, changes from public.audit_log where action = 'adjust' and subject_employee_id = $1`, [f.empA.S2]);
+    expect(log[0]).toMatchObject({ actor_id: f.users.payrollA, changes: { reason: { to: "Eid gift for everyone" } } });
+    const lineRow = (await q<{ explanation: string }>(`select explanation from public.payroll_run_lines where run_id = $1 and code = 'ADJ'`, [run]))[0];
+    expect(lineRow.explanation).toBe("Added by hand: Eid gift for everyone");
     await asUser(db, f.users.payrollA, (tx) => tx.query(`select public.set_payroll_person_status($1, $2, 'on_hold')`, [run, f.empA.S1]));
     const r = (await q<{ employee_count: number }>(`select employee_count from public.payroll_runs where id = $1`, [run]))[0];
     expect(r.employee_count).toBe(2);
@@ -122,8 +147,15 @@ describe("pay runs", () => {
 
   it("won't finalize with problems, then finalizes, locks and publishes payslips", async () => {
     await db.query(`update public.payroll_run_employees set exceptions = '[{"code":"x","severity":"error","message":"x"}]' where run_id = $1 and employee_id = $2`, [run, f.empA.M]);
-    await expect(asUser(db, f.users.payrollA, (tx) => tx.query(`select public.finalize_payroll_run($1)`, [run]))).rejects.toThrow(/problems/);
+    await expect(asUser(db, f.users.payrollA, (tx) => tx.query(`select public.approve_payroll_run($1)`, [run]))).rejects.toThrow(/problems/);
     await asUser(db, f.users.payrollA, (tx) => tx.query(`select public.calculate_payroll_run($1)`, [run]));
+    // Finalizing needs approval first; approving locks changes until it's undone.
+    await expect(asUser(db, f.users.payrollA, (tx) => tx.query(`select public.finalize_payroll_run($1)`, [run]))).rejects.toThrow(/Approve/);
+    await asUser(db, f.users.payrollA, (tx) => tx.query(`select public.approve_payroll_run($1)`, [run]));
+    await expect(asUser(db, f.users.payrollA, (tx) => tx.query(`select public.calculate_payroll_run($1)`, [run]))).rejects.toThrow(/locked/);
+    await asUser(db, f.users.payrollA, (tx) => tx.query(`select public.unapprove_payroll_run($1)`, [run]));
+    await asUser(db, f.users.payrollA, (tx) => tx.query(`select public.calculate_payroll_run($1)`, [run]));
+    await asUser(db, f.users.payrollA, (tx) => tx.query(`select public.approve_payroll_run($1)`, [run]));
     await asUser(db, f.users.payrollA, (tx) => tx.query(`select public.finalize_payroll_run($1)`, [run]));
     expect((await q<{ status: string }>(`select status from public.payroll_runs where id = $1`, [run]))[0].status).toBe("finalized");
     // Held person was removed from the run.
@@ -140,8 +172,10 @@ describe("pay runs", () => {
   });
 
   it("reversing gives loans and claims back", async () => {
-    await expect(asUser(db, f.users.payrollA, (tx) => tx.query(`select public.reverse_payroll_run($1, '')`, [run]))).rejects.toThrow(/reason/);
-    await asUser(db, f.users.payrollA, (tx) => tx.query(`select public.reverse_payroll_run($1, 'Wrong allowance')`, [run]));
+    // Only the owner can reverse, and must say why.
+    await expect(asUser(db, f.users.payrollA, (tx) => tx.query(`select public.reverse_payroll_run($1, 'Wrong allowance')`, [run]))).rejects.toThrow(/Only the owner/);
+    await expect(asUser(db, f.users.ownerA, (tx) => tx.query(`select public.reverse_payroll_run($1, '')`, [run]))).rejects.toThrow(/reason/);
+    await asUser(db, f.users.ownerA, (tx) => tx.query(`select public.reverse_payroll_run($1, 'Wrong allowance')`, [run]));
     expect(Number((await q<{ outstanding: string }>(`select outstanding from public.loans where employee_id = $1`, [f.empA.M]))[0].outstanding)).toBe(3000);
     const c = (await q<{ status: string; payroll_run_id: string | null }>(`select status, payroll_run_id from public.claims where employee_id = $1`, [f.empA.M]))[0];
     expect(c.status).toBe("approved");

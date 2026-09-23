@@ -9,7 +9,18 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Modal } from "@/components/ui/modal";
 import { Textarea } from "@/components/ui/textarea";
-import { adjustBalance, cancelApprovedLeave, decideLeave, recordLeave, startLeaveYear } from "@/lib/leave/actions";
+import { Input } from "@/components/ui/input";
+import { Field } from "@/components/ui/field";
+import {
+  adjustBalance,
+  cancelApprovedLeave,
+  decideLeave,
+  extendLeaveDocument,
+  leaveDocumentLink,
+  recordLeave,
+  startLeaveYear,
+  waiveLeaveDocument,
+} from "@/lib/leave/actions";
 
 type Opt = { value: string; label: string };
 
@@ -169,8 +180,76 @@ export function StartYearButton({ year }: { year: number }) {
           router.refresh();
         }}
       >
-        Gives everyone their days for {year} and carries over unused days from {year - 1}, up to each type&apos;s limit. Safe to run again.
+        Gives everyone their full days for {year}. Nothing is carried over from {year - 1}. Balances that already exist stay as they are. Safe to run again.
       </ConfirmDialog>
+    </>
+  );
+}
+
+/** Open the document, or (HR) give more time or waive it. Both need a reason, which is kept in the history. */
+export function DocumentActions({ id, path, canDecide, today }: { id: string; path: string | null; canDecide: boolean; today: string }) {
+  const [mode, setMode] = useState<"extend" | "waive" | null>(null);
+  const [due, setDue] = useState(today);
+  const [reason, setReason] = useState("");
+  const [pending, start] = useTransition();
+  const router = useRouter();
+  const open = () =>
+    start(async () => {
+      const r = await leaveDocumentLink(path!);
+      if (r.error) return void toast.error(r.error);
+      window.open(r.url, "_blank", "noopener");
+    });
+  const save = () =>
+    start(async () => {
+      if (!reason.trim()) return void toast.error("Add a short reason. It's kept in the history.");
+      const r = mode === "extend" ? await extendLeaveDocument(id, due, reason) : await waiveLeaveDocument(id, reason);
+      if (r.error) return void toast.error(r.error);
+      toast.success(r.message ?? "Saved.");
+      setMode(null);
+      setReason("");
+      router.refresh();
+    });
+  return (
+    <>
+      {path && (
+        <Button variant="ghost" size="sm" disabled={pending} onClick={open}>
+          Open
+        </Button>
+      )}
+      {canDecide && (
+        <>
+          <Button variant="ghost" size="sm" onClick={() => setMode("extend")}>
+            More time
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setMode("waive")}>
+            Waive
+          </Button>
+        </>
+      )}
+      <Modal
+        open={mode !== null}
+        onClose={() => setMode(null)}
+        title={mode === "extend" ? "Give more time for the document" : "Waive the document"}
+        description={
+          mode === "extend"
+            ? "If the days had already become absences, the time off is put back until the new deadline."
+            : "The time off stands without a document. If the days had become absences, they're put back as time off."
+        }
+      >
+        <div className="space-y-4">
+          {mode === "extend" && (
+            <Field label="New deadline" htmlFor={`due-${id}`}>
+              <Input id={`due-${id}`} type="date" min={today} value={due} onChange={(e) => setDue(e.target.value)} />
+            </Field>
+          )}
+          <Field label="Reason" htmlFor={`why-${id}`}>
+            <Textarea id={`why-${id}`} rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="For example clinic was closed" />
+          </Field>
+          <Button loading={pending} onClick={save}>
+            {mode === "extend" ? "Save new deadline" : "Waive document"}
+          </Button>
+        </div>
+      </Modal>
     </>
   );
 }

@@ -416,8 +416,11 @@ export const MODULES: ModuleDefinition[] = [
     ],
     nav: [
       { label: "Time", href: "/app/time", icon: "clock", requires: { resource: "attendance", action: "view" } },
+      { label: "Attendance register", href: "/app/time/register", icon: "list-checks", requires: { resource: "attendance", action: "view", scope: "team" } },
       { label: "Roster", href: "/app/time/roster", icon: "calendar-range", requires: { resource: "roster", action: "view" } },
-      { label: "Timesheets", href: "/app/time/timesheets", icon: "list-checks", requires: { resource: "attendance", action: "approve" } },
+      { label: "Overtime", href: "/app/time/overtime", icon: "clock", requires: { resource: "attendance", action: "view", scope: "team" } },
+      { label: "Attendance reports", href: "/app/time/reports", icon: "bar-chart", requires: { resource: "attendance", action: "view", scope: "team" } },
+      { label: "Timesheets", href: "/app/time/timesheets", icon: "file-text", requires: { resource: "attendance", action: "approve" } },
     ],
     portal: [{ label: "Time", href: "/staff/time", icon: "clock", tab: true, homeAction: true }],
     widgets: [
@@ -454,9 +457,9 @@ export const MODULES: ModuleDefinition[] = [
     tagline: "People ask for time off on their phone, managers answer in a tap, balances stay right.",
     features: [
       "Annual, sick, family and your own types",
-      "Balances that build up by themselves",
-      "A team calendar that shows clashes",
-      "Public holidays loaded for you",
+      "Fixed days each leave year, with your own rules per type",
+      "A company calendar with holidays, events and blackout dates",
+      "Public holidays loaded, medical certificates chased",
     ],
     outcomes: [
       "Answer a leave request from anywhere in one tap",
@@ -471,6 +474,7 @@ export const MODULES: ModuleDefinition[] = [
     nav: [
       { label: "Time off", href: "/app/time-off", icon: "calendar", requires: { resource: "leave", action: "view" } },
       { label: "Time off calendar", href: "/app/time-off/calendar", icon: "calendar-range", requires: { resource: "leave", action: "view" } },
+      { label: "Leave types & rules", href: "/app/time-off/types", icon: "sliders", requires: { resource: "leave", action: "edit" } },
     ],
     portal: [{ label: "Time off", href: "/staff/time-off", icon: "calendar", homeAction: true }],
     widgets: [{ key: "off_today", label: "Who's off", section: "today", requires: { resource: "leave", action: "view" } }],
@@ -486,6 +490,24 @@ export const MODULES: ModuleDefinition[] = [
         label: "Time off answered",
         description: "When your request is approved or declined.",
         defaultChannels: ["in_app", "email"],
+      },
+      {
+        key: "leave.document_due",
+        label: "Leave document due",
+        description: "The day before a medical certificate or other document is due.",
+        defaultChannels: ["in_app", "email"],
+      },
+      {
+        key: "leave.document_overdue",
+        label: "Leave document missing",
+        description: "When time off becomes an absence because its document never came.",
+        defaultChannels: ["in_app", "email"],
+      },
+      {
+        key: "leave.document_late",
+        label: "Late leave document",
+        description: "When someone adds a document after the deadline.",
+        defaultChannels: ["in_app"],
       },
     ],
     setup: { title: "Time off types", description: "Which kinds of leave you give and how many days." },
@@ -577,7 +599,12 @@ export const MODULES: ModuleDefinition[] = [
         ownerGrantOnly: true,
       },
     ],
-    nav: [{ label: "Payroll", href: "/app/payroll", icon: "wallet", requires: { resource: "payroll", action: "view" } }],
+    nav: [
+      { label: "Payroll", href: "/app/payroll", icon: "wallet", requires: { resource: "payroll", action: "view" } },
+      { label: "Salaries", href: "/app/payroll/salaries", icon: "users", requires: { resource: "compensation", action: "view", scope: "all" } },
+      { label: "Allowances & deductions", href: "/app/payroll/allowances", icon: "sliders", requires: { resource: "payroll", action: "view", scope: "all" } },
+      { label: "Payroll reports", href: "/app/payroll/reports", icon: "bar-chart", requires: { resource: "payroll", action: "view", scope: "all" } },
+    ],
     portal: [{ label: "Pay", href: "/staff/pay", icon: "wallet", tab: true, requires: { resource: "payslips", action: "view" } }],
     widgets: [
       { key: "payroll_due", label: "Next pay day", section: "attention", requires: { resource: "payroll", action: "view" } },

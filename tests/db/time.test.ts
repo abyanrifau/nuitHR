@@ -27,7 +27,7 @@ beforeAll(async () => {
     [f.bizA],
   ))[0].id;
   sick = (await q<{ id: string }>(
-    `insert into public.leave_types (business_id, name, code, entitlement_days, accrual_method, requires_document, document_required_after_days, allow_half_day) values ($1, 'Sick leave', 'SL', 15, 'upfront', true, 2, true) returning id`,
+    `insert into public.leave_types (business_id, name, code, entitlement_days, document_rule, document_over_days, allow_half_day, allow_after_the_fact) values ($1, 'Sick leave', 'SK', 15, 'over_days', 2, true, true) returning id`,
     [f.bizA],
   ))[0].id;
 });
@@ -43,8 +43,9 @@ describe("the day's numbers", () => {
     const row = (await q<{ late_minutes: number; worked_minutes: number; overtime_minutes: number; status: string }>(
       `select late_minutes, worked_minutes, overtime_minutes, status from public.attendance_records where id = $1`, [r.id]))[0];
     expect(row.late_minutes).toBe(30);
-    expect(row.worked_minutes).toBe(570);
-    expect(row.overtime_minutes).toBe(570 - 420);
+    // No break was recorded, so the shift's 1 hour break is taken off: 570 - 60.
+    expect(row.worked_minutes).toBe(510);
+    expect(row.overtime_minutes).toBe(510 - 420);
     expect(row.status).toBe("late");
   });
 
@@ -117,7 +118,7 @@ describe("timesheets", () => {
     const t = (await q<{ days_present: string; overtime_minutes: number }>(
       `select days_present, overtime_minutes from public.timesheets where employee_id = $1 and period_start = '2026-01-01'`, [f.empA.S2]))[0];
     expect(Number(t.days_present)).toBe(1.5);
-    expect(t.overtime_minutes).toBe(150);
+    expect(t.overtime_minutes).toBe(90);
   });
 });
 
@@ -171,7 +172,7 @@ describe("time off", () => {
     await asUser(db, f.users.staffA, (tx) => tx.query(`select public.request_leave($1, $2, '2026-09-06', '2026-09-06')`, [f.bizA, sick]));
   });
 
-  it("adjustments change the balance, and a new year carries days over up to the limit", async () => {
+  it("adjustments change the balance, and a new year starts again with the full days (nothing carried over)", async () => {
     await asUser(db, f.users.hrA, (tx) =>
       tx.query(`insert into public.leave_adjustments (business_id, employee_id, leave_type_id, period_year, days, reason) values ($1, $2, $3, 2026, 2, 'Worked a holiday')`, [f.bizA, f.empA.S1, annual]),
     );
@@ -179,8 +180,8 @@ describe("time off", () => {
     await asUser(db, f.users.hrA, (tx) => tx.query(`select public.start_leave_year($1, 2027)`, [f.bizA]));
     const next = (await q<{ carried_forward: string; balance: string }>(
       `select carried_forward, balance from public.leave_balances where employee_id = $1 and leave_type_id = $2 and period_year = 2027`, [f.empA.S1, annual]))[0];
-    expect(Number(next.carried_forward)).toBe(10);
-    expect(Number(next.balance)).toBe(40);
+    expect(Number(next.carried_forward)).toBe(0);
+    expect(Number(next.balance)).toBe(30);
   });
 
   it("staff only see their own balances, and can't approve their own time off", async () => {

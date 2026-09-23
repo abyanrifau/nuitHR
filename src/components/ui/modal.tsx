@@ -42,7 +42,8 @@ export function Modal({
         if (e.target === ref.current) onClose();
       }}
       className={cn(
-        "m-auto max-h-[90dvh] w-[calc(100%-2rem)] overflow-y-auto rounded-xl border border-border-strong bg-surface-raised p-0 text-foreground backdrop:bg-black/60",
+        // Text settings are reset so a pop-up opened from a table cell doesn't inherit its alignment or no-wrap.
+        "m-auto max-h-[90dvh] w-[calc(100%-2rem)] overflow-y-auto rounded-xl text-left font-normal whitespace-normal border border-border-strong bg-surface-raised p-0 text-foreground backdrop:bg-black/60",
         wide ? "max-w-2xl" : "max-w-lg",
       )}
     >

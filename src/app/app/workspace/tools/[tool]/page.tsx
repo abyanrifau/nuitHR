@@ -83,7 +83,7 @@ export default async function ToolSettingsPage({ params }: PageProps<"/app/works
       const [{ data: types }, { data: hol }] = await Promise.all([
         supabase
           .from("leave_types")
-          .select("code, name, entitlement_days, is_paid, accrual_method, carry_forward_max, gender_eligibility, requires_document")
+          .select("code, name, entitlement_days, is_paid, accrual_method, gender_eligibility, requires_document")
           .eq("business_id", bid)
           .eq("is_active", true)
           .order("sort"),
@@ -95,8 +95,7 @@ export default async function ToolSettingsPage({ params }: PageProps<"/app/works
           name: t.name,
           days: Number(t.entitlement_days),
           paid: t.is_paid,
-          accrual: t.accrual_method,
-          carry_forward: Number(t.carry_forward_max),
+          accrual: t.accrual_method === "none" ? ("none" as const) : ("upfront" as const),
           gender: t.gender_eligibility,
           requires_document: t.requires_document,
         })) as SetupConfig<"leave">["leave_types"];

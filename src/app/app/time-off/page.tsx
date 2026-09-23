@@ -9,7 +9,9 @@ import { createClient } from "@/lib/supabase/server";
 import { formatDate, localDay } from "@/lib/format";
 import { can } from "@/modules/access";
 import { cn } from "@/lib/utils";
-import { AdjustButton, CancelLeaveButton, DecideLeaveButtons, RecordLeaveButton, StartYearButton } from "./time-off-client";
+import { DOCUMENT_STATUS } from "@/lib/leave/rules";
+import { TimeOffTabs } from "./sections";
+import { AdjustButton, CancelLeaveButton, DecideLeaveButtons, DocumentActions, RecordLeaveButton, StartYearButton } from "./time-off-client";
 
 const PAGE = 50;
 
@@ -41,20 +43,23 @@ export default async function TimeOffPage(props: PageProps<"/app/time-off">) {
   const today = localDay(new Date(), active.timezone);
   const thisYear = Number(today.slice(0, 4));
   const year = Number(sp.year) || thisYear;
-  const tab = sp.tab === "balances" ? "balances" : "requests";
+  const tab = sp.tab === "balances" || sp.tab === "documents" ? sp.tab : "requests";
   const page = Math.max(1, Number(sp.page) || 1);
   const supabase = await createClient();
   // Everything this tab needs, in one go.
   let requestsQ = supabase
     .from("leave_requests")
-    .select("id, start_date, end_date, days, status, reason, decision_comment, attachment_path, created_at, employee:employees(id, first_name, last_name), type:leave_types(name, color)", { count: "exact" })
+    .select(
+      "id, start_date, end_date, days, status, reason, decision_comment, attachment_path, document_status, document_due_on, created_at, employee:employees(id, first_name, last_name), type:leave_types(name, color)",
+      { count: "exact" },
+    )
     .eq("business_id", active.business_id)
     .order("start_date", { ascending: sp.status === "pending" })
     .range((page - 1) * PAGE, page * PAGE - 1);
   if (sp.status) requestsQ = requestsQ.eq("status", sp.status);
   else requestsQ = requestsQ.gte("end_date", `${year}-01-01`).lte("start_date", `${year}-12-31`);
-  const [{ data: types }, { data: people }, requestsTab, balancesReady] = await Promise.all([
-    supabase.from("leave_types").select("id, name, accrual_method").eq("business_id", active.business_id).eq("is_active", true).order("sort").order("name"),
+  const [{ data: types }, { data: people }, requestsTab, balancesReady, documentsTab] = await Promise.all([
+    supabase.from("leave_types").select("id, name, entitlement_mode").eq("business_id", active.business_id).eq("is_active", true).order("sort").order("name"),
     supabase.from("employees").select("id, first_name, last_name, employee_code").eq("business_id", active.business_id).in("status", ["active", "probation", "on_leave", "suspended"]).order("first_name").limit(3000),
     tab === "requests"
       ? Promise.all([
@@ -64,6 +69,17 @@ export default async function TimeOffPage(props: PageProps<"/app/time-off">) {
         ])
       : null,
     tab === "balances" ? supabase.rpc("refresh_leave_balances", { p_business: active.business_id, p_year: year }) : null,
+    tab === "documents"
+      ? supabase
+          .from("leave_requests")
+          .select(
+            "id, start_date, end_date, days, status, attachment_path, document_status, document_due_on, document_note, absent_since, employee:employees(id, first_name, last_name), type:leave_types(name, color)",
+          )
+          .eq("business_id", active.business_id)
+          .in("document_status", sp.status === "all" ? ["needed", "overdue", "uploaded", "waived"] : ["needed", "overdue"])
+          .order("document_due_on", { ascending: true })
+          .limit(300)
+      : null,
   ]);
   const canApprove = can(ctx, "leave", "approve", "team");
   const canEdit = can(ctx, "leave", "edit");
@@ -82,6 +98,83 @@ export default async function TimeOffPage(props: PageProps<"/app/time-off">) {
           </Link>
         }
       />
+    );
+  } else if (tab === "documents") {
+    const rows = documentsTab?.data ?? [];
+    body = (
+      <>
+        <div className="mb-4 flex flex-wrap gap-2 text-[13px]">
+          {[
+            ["", "Still needed"],
+            ["all", "All with documents"],
+          ].map(([k, label]) => (
+            <Link
+              key={k}
+              href={`/app/time-off?tab=documents${k ? `&status=${k}` : ""}`}
+              className={cn("rounded-full border px-3 py-1", (sp.status ?? "") === k ? "border-foreground text-foreground" : "border-border text-muted-foreground hover:text-foreground")}
+            >
+              {label}
+            </Link>
+          ))}
+        </div>
+        {rows.length ? (
+          <Table>
+            <thead>
+              <tr>
+                <Th>Person</Th>
+                <Th>Time off</Th>
+                <Th>Document</Th>
+                <Th>
+                  <span className="sr-only">Actions</span>
+                </Th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const e = r.employee as unknown as { id: string; first_name: string; last_name: string };
+                const t = r.type as unknown as { name: string; color: string };
+                const d = DOCUMENT_STATUS[r.document_status] ?? DOCUMENT_STATUS.needed;
+                const late = r.document_status === "needed" && r.document_due_on && r.document_due_on < today;
+                return (
+                  <Tr key={r.id}>
+                    <Td>
+                      <Link href={`/app/people/${e.id}?tab=leave`} className="block text-foreground hover:underline">
+                        {`${e.first_name} ${e.last_name}`.trim()}
+                      </Link>
+                      <span className="flex items-center gap-1.5 text-[12px] text-subtle-foreground">
+                        <span className="size-2 rounded-full" style={{ background: t.color }} aria-hidden /> {t.name}
+                      </span>
+                    </Td>
+                    <Td className="tabular">
+                      {formatDate(r.start_date, active.date_format)}
+                      {r.end_date !== r.start_date && <span className="block text-[12px] text-subtle-foreground">to {formatDate(r.end_date, active.date_format)}</span>}
+                      <span className="block text-[12px] text-subtle-foreground">
+                        {n(r.days)} {Number(r.days) === 1 ? "day" : "days"} · {STATUS[r.status]?.label ?? r.status}
+                      </span>
+                    </Td>
+                    <Td>
+                      <StatusDot tone={late ? "danger" : d.tone}>{d.label}</StatusDot>
+                      {r.document_due_on && (r.document_status === "needed" || r.document_status === "overdue") && (
+                        <span className="block text-[12px] text-subtle-foreground">Due {formatDate(r.document_due_on, active.date_format)}</span>
+                      )}
+                      {r.document_note && <span className="block text-[12px] text-muted-foreground">HR: {r.document_note}</span>}
+                    </Td>
+                    <Td className="text-right whitespace-nowrap">
+                      <DocumentActions id={r.id} path={r.attachment_path} canDecide={canApprove && r.document_status !== "uploaded" && r.document_status !== "waived"} today={today} />
+                    </Td>
+                  </Tr>
+                );
+              })}
+            </tbody>
+          </Table>
+        ) : (
+          <EmptyState title="No documents waiting" description="Time off that needs a document, such as a medical certificate, shows here until it's added." />
+        )}
+        <p className="mt-3 text-[12px] text-subtle-foreground">
+          The day before a deadline, the person, their manager and HR get a reminder. After it, the days become unapproved absences. Give more time or waive the
+          document to put the time off back.
+        </p>
+      </>
     );
   } else if (tab === "requests") {
     const [{ data: rows, count }, { data: waiting }, { data: pendingReqs }] = requestsTab!;
@@ -132,7 +225,7 @@ export default async function TimeOffPage(props: PageProps<"/app/time-off">) {
                       </Link>
                       <span className="flex items-center gap-1.5 text-[12px] text-subtle-foreground">
                         <span className="size-2 rounded-full" style={{ background: t.color }} aria-hidden /> {t.name}
-                        {r.attachment_path && " · document attached"}
+                        {r.document_status !== "not_needed" && ` · ${(DOCUMENT_STATUS[r.document_status]?.label ?? "").toLowerCase()}`}
                       </span>
                       {r.reason && <span className="block text-[12px] text-muted-foreground">{r.reason}</span>}
                     </Td>
@@ -170,7 +263,7 @@ export default async function TimeOffPage(props: PageProps<"/app/time-off">) {
       .eq("business_id", active.business_id)
       .eq("period_year", year);
     const by = new Map((balances ?? []).map((b) => [`${b.employee_id}|${b.leave_type_id}`, b]));
-    const shown = (types ?? []).filter((t) => t.accrual_method !== "none");
+    const shown = (types ?? []).filter((t) => t.entitlement_mode === "annual" || t.entitlement_mode === "birthday");
     body = (
       <div className="overflow-x-auto rounded-xl border border-border">
         <table className="w-full min-w-[40rem] text-sm">
@@ -194,7 +287,7 @@ export default async function TimeOffPage(props: PageProps<"/app/time-off">) {
                   return (
                     <td key={t.id} className="border-b border-border px-3 py-2.5 text-right tabular">
                       {b ? (
-                        <span title={`Given ${n(b.accrued)} · carried over ${n(b.carried_forward)} · changed ${n(b.adjusted)} · used ${n(b.taken)} · waiting ${n(b.pending)}`}>
+                        <span title={`Given ${n(Number(b.accrued) + Number(b.carried_forward))} · changed ${n(b.adjusted)} · used ${n(b.taken)} · waiting ${n(b.pending)}`}>
                           <span className={cn(left! < 0 ? "text-danger" : "text-foreground")}>{n(left!)}</span>
                           <span className="block text-[11px] text-subtle-foreground">{n(b.taken)} used</span>
                         </span>
@@ -217,38 +310,20 @@ export default async function TimeOffPage(props: PageProps<"/app/time-off">) {
       <PageHeader
         label="run"
         title="Time off"
-        description="Requests from the staff app, everyone's balances, and time off you enter yourself."
-        actions={
-          <>
-            <Link href="/app/time-off/calendar" className={buttonClasses({ variant: "secondary" })}>
-              Calendar
-            </Link>
-            {canApprove && types?.length ? <RecordLeaveButton people={peopleOpts} types={typeOpts} /> : null}
-          </>
-        }
+        description="Requests from the staff app, everyone's balances, documents still to come, and time off you enter yourself."
+        actions={canApprove && types?.length ? <RecordLeaveButton people={peopleOpts} types={typeOpts} /> : undefined}
       />
-      <nav aria-label="Sections" className="mb-6 flex flex-wrap items-center gap-6 border-b border-border">
-        {[
-          { key: "requests", label: "Requests" },
-          { key: "balances", label: "Balances" },
-        ].map((t) => (
-          <Link
-            key={t.key}
-            href={`/app/time-off?tab=${t.key}&year=${year}`}
-            aria-current={t.key === tab ? "page" : undefined}
-            className={cn("-mb-px border-b py-3 text-sm", t.key === tab ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground")}
-          >
-            {t.label}
-          </Link>
-        ))}
-        <span className="ml-auto flex items-center gap-2 pb-2 text-[13px]">
+      <TimeOffTabs current={tab} canEdit={can(ctx, "leave", "edit", "all")} />
+      {tab !== "documents" && (
+        <div className="-mt-4 mb-5 flex flex-wrap items-center gap-2 text-[13px]">
+          {tab === "balances" && <span className="mr-1 text-subtle-foreground">Leave year starting in</span>}
           {[year - 1, year, year + 1].map((y) => (
             <Link key={y} href={`/app/time-off?tab=${tab}&year=${y}`} className={cn("rounded-full border px-3 py-1", y === year ? "border-foreground" : "border-border text-muted-foreground")}>
               {y}
             </Link>
           ))}
-        </span>
-      </nav>
+        </div>
+      )}
       {tab === "balances" && canEdit && types?.length ? (
         <div className="mb-4 flex flex-wrap gap-2">
           <AdjustButton people={peopleOpts} types={typeOpts} year={year} />

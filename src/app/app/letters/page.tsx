@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { TabNav } from "@/components/ui/tab-nav";
 import { Alert } from "@/components/ui/alert";
 import { EmptyState, PageHeader } from "@/components/ui/page";
 import { StatusDot, Table, Td, Th, Tr } from "@/components/ui/table";
@@ -7,7 +8,6 @@ import { getActiveBusiness, toAccessContext } from "@/lib/auth/session";
 import { createClient } from "@/lib/supabase/server";
 import { formatDate } from "@/lib/format";
 import { can } from "@/modules/access";
-import { cn } from "@/lib/utils";
 import { LetterMaker, OpenLetterButton, RequestActions, TemplatesPanel } from "./letters-client";
 
 export const metadata: Metadata = { title: "Letters & files" };
@@ -178,21 +178,7 @@ export default async function LettersPage(props: PageProps<"/app/letters">) {
   return (
     <div>
       <PageHeader label="foundation" title="Letters & files" description="Make certificates and letters on your letterhead, and handle letters staff ask for." />
-      <nav aria-label="Sections" className="-mx-4 mb-8 overflow-x-auto border-b border-border px-4 [scrollbar-width:none]">
-        <ul className="flex gap-6">
-          {tabs.map((t) => (
-            <li key={t.key}>
-              <Link
-                href={`/app/letters?tab=${t.key}`}
-                aria-current={t.key === tab ? "page" : undefined}
-                className={cn("-mb-px block border-b py-3 text-sm whitespace-nowrap", t.key === tab ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground")}
-              >
-                {t.label}
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </nav>
+      <TabNav label="Sections" current={tab} tabs={tabs.map((t) => ({ key: t.key, label: t.label, href: `/app/letters?tab=${t.key}` }))} />
       {body}
     </div>
   );

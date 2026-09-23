@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import { Mail } from "lucide-react";
 import { PageHeader } from "@/components/ui/page";
 import { getStaffContext } from "@/lib/staff/context";
-import { fullName, initials } from "@/lib/format";
+import { Avatar } from "@/components/ui/avatar";
+import { fullName } from "@/lib/format";
 import { DirectorySearch } from "./directory-search";
 
 export const metadata: Metadata = { title: "Directory" };
@@ -16,6 +17,7 @@ interface Row {
   department: string | null;
   location: string | null;
   work_email: string | null;
+  photo_path: string | null;
 }
 
 export default async function StaffDirectory(props: PageProps<"/staff/directory">) {
@@ -35,7 +37,7 @@ export default async function StaffDirectory(props: PageProps<"/staff/directory"
         <ul className="divide-y divide-border rounded-xl border border-border">
           {rows.map((r) => (
             <li key={r.id} className="flex items-center gap-3 px-4 py-3">
-              <span className="grid size-10 shrink-0 place-items-center rounded-full border border-border text-[12px] text-muted-foreground">{initials(r)}</span>
+              <Avatar name={fullName(r)} path={r.photo_path} size="md" />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-foreground">{fullName(r)}</p>
                 <p className="truncate text-[13px] text-subtle-foreground">{[r.job_title, r.department, r.location].filter(Boolean).join(" · ")}</p>

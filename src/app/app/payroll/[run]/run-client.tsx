@@ -3,14 +3,15 @@
 import { useCallback, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Calculator, ChevronDown, Download, FileText, Lock, Plus, Trash2 } from "lucide-react";
+import { BadgeCheck, Calculator, ChevronDown, Download, FileText, Lock, Mail, Plus, Trash2, Undo2 } from "lucide-react";
 import { ActionForm, CheckboxField, SelectField, TextField } from "@/components/ui/action-form";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Modal } from "@/components/ui/modal";
 import { Textarea } from "@/components/ui/textarea";
-import { addAdjustment, deleteRun, finalizeRun, markPaid, recalculate, removeAdjustment, reverseRun, setPersonStatus } from "@/lib/payroll/actions";
+import { addAdjustment, approveRun, deleteRun, finalizeRun, markPaid, recalculate, removeAdjustment, reverseRun, setPersonStatus, unapproveRun } from "@/lib/payroll/actions";
+import { emailPayslips } from "@/lib/payroll/payslip-email";
 import type { ActionResult } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 
@@ -20,11 +21,11 @@ export function RunActions({
   run,
   can,
 }: {
-  run: { id: string; status: string; errors: number };
-  can: { edit: boolean; approve: boolean; del: boolean; exp: boolean };
+  run: { id: string; status: string; errors: number; emailed: boolean };
+  can: { edit: boolean; approve: boolean; del: boolean; exp: boolean; owner: boolean };
 }) {
   const [pending, start] = useTransition();
-  const [confirm, setConfirm] = useState<"finalize" | "delete" | "reverse" | "paid" | null>(null);
+  const [confirm, setConfirm] = useState<"approve" | "finalize" | "delete" | "reverse" | "paid" | "email" | null>(null);
   const [reason, setReason] = useState("");
   const router = useRouter();
   const go = (fn: () => Promise<ActionResult>, after?: () => void) =>
@@ -37,6 +38,7 @@ export function RunActions({
       else router.refresh();
     });
   const open = run.status === "draft" || run.status === "calculated";
+  const done = run.status === "finalized" || run.status === "paid";
 
   return (
     <>
@@ -47,10 +49,11 @@ export function RunActions({
           </summary>
           <div className="absolute right-0 z-20 mt-2 w-60 overflow-hidden rounded-xl border border-border-strong bg-surface-raised text-sm">
             {[
-              ["bank", "Bank transfer list (CSV)"],
+              ["bank", "Bank transfer file (CSV)"],
               ["summary", "Pay summary (CSV)"],
-              ["pension", "Pension contributions (CSV)"],
-              ["journal", "Accounting journal (CSV)"],
+              ["journal", "Payroll journal for the accountant (CSV)"],
+              ["pension", "Pension report (CSV)"],
+              ["tax", "Tax report (CSV)"],
             ].map(([k, label]) => (
               <a key={k} href={`/app/payroll/${run.id}/export?type=${k}`} className="block px-4 py-2.5 hover:bg-accent-soft">
                 {label}
@@ -65,8 +68,23 @@ export function RunActions({
         </Button>
       )}
       {run.status === "calculated" && can.approve && (
-        <Button disabled={pending || run.errors > 0} onClick={() => setConfirm("finalize")}>
-          <Lock className="size-4" aria-hidden /> Finalize
+        <Button disabled={pending || run.errors > 0} onClick={() => setConfirm("approve")}>
+          <BadgeCheck className="size-4" aria-hidden /> Approve
+        </Button>
+      )}
+      {run.status === "approved" && can.approve && (
+        <>
+          <Button variant="ghost" loading={pending} onClick={() => go(() => unapproveRun(run.id))}>
+            <Undo2 className="size-4" aria-hidden /> Undo approval
+          </Button>
+          <Button disabled={pending} onClick={() => setConfirm("finalize")}>
+            <Lock className="size-4" aria-hidden /> Finalize
+          </Button>
+        </>
+      )}
+      {done && can.edit && (
+        <Button variant="secondary" disabled={pending} onClick={() => setConfirm("email")}>
+          <Mail className="size-4" aria-hidden /> {run.emailed ? "Email payslips again" : "Email payslips"}
         </Button>
       )}
       {run.status === "finalized" && can.approve && (
@@ -74,16 +92,38 @@ export function RunActions({
           Mark as paid
         </Button>
       )}
-      {open && can.del && (
+      {(open || run.status === "approved") && can.del && (
         <Button variant="ghost" disabled={pending} onClick={() => setConfirm("delete")} aria-label="Delete pay run">
           <Trash2 className="size-4" aria-hidden />
         </Button>
       )}
-      {(run.status === "finalized" || run.status === "paid") && can.approve && (
+      {done && can.owner && (
         <Button variant="danger" disabled={pending} onClick={() => setConfirm("reverse")}>
           Reverse
         </Button>
       )}
+
+      <ConfirmDialog
+        open={confirm === "approve"}
+        tone="primary"
+        title="Approve this pay run?"
+        confirmLabel="Approve"
+        onCancel={() => setConfirm(null)}
+        onConfirm={() => go(() => approveRun(run.id))}
+      >
+        It can&apos;t be changed or calculated again after this, unless you undo the approval. Finalizing comes next.
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={confirm === "email"}
+        tone="primary"
+        title={run.emailed ? "Email payslips again?" : "Email everyone their payslip?"}
+        confirmLabel={run.emailed ? "Send to people not sent yet" : "Send payslips"}
+        onCancel={() => setConfirm(null)}
+        onConfirm={() => go(() => emailPayslips(run.id, run.emailed))}
+      >
+        Each person gets an email with their payslip attached as a PDF, to their work email (or personal email, or the email they sign in with).
+        {run.emailed && " Only people who haven't been sent theirs yet get one."}
+      </ConfirmDialog>
 
       <ConfirmDialog
         open={confirm === "finalize"}
@@ -93,7 +133,7 @@ export function RunActions({
         onCancel={() => setConfirm(null)}
         onConfirm={() => go(() => finalizeRun(run.id))}
       >
-        It&apos;s locked after this. Payslips appear in everyone&apos;s staff app, loan repayments are recorded, and claims are marked paid. People on hold are left out.
+        It&apos;s locked for good after this. Payslips appear in everyone&apos;s staff app, loan repayments are recorded, and claims are marked paid. People on hold are left out. Only the owner can reverse it.
       </ConfirmDialog>
       <ConfirmDialog open={confirm === "paid"} tone="primary" title="Mark as paid?" confirmLabel="Mark as paid" onCancel={() => setConfirm(null)} onConfirm={() => go(() => markPaid(run.id))}>
         Do this once the bank transfers have gone out.
@@ -130,7 +170,7 @@ interface Person {
   net: number;
   employer: number;
   exceptions: { code: string; message: string; severity: string }[];
-  lines: { id: string; name: string; kind: string; amount: number; quantity: number | string | null; manual: boolean }[];
+  lines: { id: string; name: string; kind: string; amount: number; quantity: number | string | null; manual: boolean; explanation: string | null }[];
 }
 
 export function RunPeople({ runId, locked, canEdit, currency, people }: { runId: string; locked: boolean; canEdit: boolean; currency: string; people: Person[] }) {
@@ -206,9 +246,10 @@ export function RunPeople({ runId, locked, canEdit, currency, people }: { runId:
                         {p.lines
                           .filter((l) => l.kind === kind)
                           .map((l) => (
-                            <li key={l.id} className="flex items-center justify-between gap-2">
+                            <li key={l.id} className="flex items-start justify-between gap-2">
                               <span className="text-muted-foreground">
                                 {l.name}
+                                {l.explanation && <span className="block text-[12px] text-subtle-foreground">{l.explanation}</span>}
                                 {l.manual && !locked && canEdit && (
                                   <button type="button" onClick={() => run(() => removeAdjustment(runId, l.id))} className="ml-2 text-[12px] text-danger underline underline-offset-2" disabled={pending}>
                                     remove
@@ -280,6 +321,7 @@ export function RunPeople({ runId, locked, canEdit, currency, people }: { runId:
             </div>
             <CheckboxField name="taxable" label="Taxable" defaultChecked />
             <CheckboxField name="pensionable" label="Counts for pension" />
+            <TextField name="reason" label="Reason" placeholder="Why it's being added. Kept in the history." />
           </ActionForm>
         )}
       </Modal>

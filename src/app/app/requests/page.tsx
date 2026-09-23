@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { TabNav } from "@/components/ui/tab-nav";
 import { Settings2 } from "lucide-react";
 import { buttonClasses } from "@/components/ui/button";
 import { EmptyState, PageHeader } from "@/components/ui/page";
@@ -163,21 +164,7 @@ export default async function RequestsPage(props: PageProps<"/app/requests">) {
           ) : undefined
         }
       />
-      <nav aria-label="Request lists" className="-mx-4 mb-8 overflow-x-auto border-b border-border px-4 [scrollbar-width:none]">
-        <ul className="flex gap-6">
-          {tabs.map((t) => (
-            <li key={t.key}>
-              <Link
-                href={t.key === "inbox" ? "/app/requests" : `/app/requests?tab=${t.key}`}
-                aria-current={t.key === tab ? "page" : undefined}
-                className={cn("-mb-px block border-b py-3 text-sm whitespace-nowrap", t.key === tab ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground")}
-              >
-                {t.label}
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </nav>
+      <TabNav label="Request lists" current={tab} tabs={tabs.map((t) => ({ key: t.key, label: t.label, href: t.key === "inbox" ? "/app/requests" : `/app/requests?tab=${t.key}` }))} />
       {body}
       {tab === "all" && (
         <p className="mt-4 text-[13px] text-subtle-foreground">

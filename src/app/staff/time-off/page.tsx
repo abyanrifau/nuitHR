@@ -5,7 +5,8 @@ import { StatusDot } from "@/components/ui/table";
 import { CancelButton } from "@/app/app/requests/stand-in";
 import { getStaffContext } from "@/lib/staff/context";
 import { formatDate, localDay } from "@/lib/format";
-import { LeaveRequestForm } from "./leave-form";
+import { DOCUMENT_STATUS, type MyLeaveType } from "@/lib/leave/rules";
+import { AddDocumentButton, LeaveRequestForm } from "./leave-form";
 
 export const metadata: Metadata = { title: "Time off" };
 
@@ -24,29 +25,18 @@ const n = (v: number | string) => {
 export default async function StaffTimeOff() {
   const { active, me, supabase } = await getStaffContext();
   if (!me) return <Alert tone="warning">Your login isn&apos;t linked to a staff profile yet. Ask HR to link it.</Alert>;
-  const year = Number(localDay(new Date(), active.timezone).slice(0, 4));
-  const [{ data: balances }, { data: requests }, { data: holidays }, { data: pendingReqs }] = await Promise.all([
-    supabase.rpc("my_leave_balances", { p_business: active.business_id, p_year: year }),
+  const [{ data: myTypes }, { data: requests }, { data: holidays }, { data: pendingReqs }] = await Promise.all([
+    supabase.rpc("my_leave_types", { p_business: active.business_id }),
     supabase
       .from("leave_requests")
-      .select("id, start_date, end_date, days, status, decision_comment, type:leave_types(name)")
+      .select("id, start_date, end_date, days, status, decision_comment, document_status, document_due_on, type:leave_types(name)")
       .eq("employee_id", me.id)
       .order("start_date", { ascending: false })
       .limit(30),
     supabase.from("public_holidays").select("name, holiday_date").eq("business_id", active.business_id).gte("holiday_date", localDay(new Date(), active.timezone)).order("holiday_date").limit(4),
     supabase.from("approval_requests").select("id, source_id").eq("source_table", "leave_requests").eq("status", "pending"),
   ]);
-  const types = (balances ?? []) as {
-    leave_type_id: string;
-    name: string;
-    color: string;
-    accrual_method: string;
-    balance: number;
-    pending: number;
-    taken: number;
-    allow_half_day: boolean;
-    requires_document: boolean;
-  }[];
+  const types = (myTypes ?? []) as MyLeaveType[];
   const reqFor = new Map((pendingReqs ?? []).map((r) => [r.source_id, r.id]));
 
   return (
@@ -56,14 +46,14 @@ export default async function StaffTimeOff() {
       {types.length > 0 ? (
         <section aria-labelledby="bal">
           <h2 id="bal" className="section-label mb-3">
-            what you have left in {year}
+            what you have left
           </h2>
           <ul className="grid grid-cols-2 gap-3">
             {types
-              .filter((t) => t.accrual_method !== "none")
+              .filter((t) => t.available !== null)
               .map((t) => (
-                <li key={t.leave_type_id} className="rounded-xl border border-border p-4">
-                  <p className="font-display text-3xl tabular">{n(Number(t.balance) - Number(t.pending))}</p>
+                <li key={t.id} className="rounded-xl border border-border p-4">
+                  <p className="font-display text-3xl tabular">{n(t.available ?? 0)}</p>
                   <p className="text-sm text-foreground">{t.name}</p>
                   <p className="text-[12px] text-subtle-foreground">
                     {n(t.taken)} used{Number(t.pending) > 0 && ` · ${n(t.pending)} waiting`}
@@ -85,7 +75,7 @@ export default async function StaffTimeOff() {
             businessId={active.business_id}
             employeeId={me.id}
             today={localDay(new Date(), active.timezone)}
-            types={types.map((t) => ({ id: t.leave_type_id, name: t.name, halfDays: t.allow_half_day, needsDocument: t.requires_document }))}
+            types={types}
           />
         </section>
       )}
@@ -110,7 +100,18 @@ export default async function StaffTimeOff() {
                     <p className="mt-1.5">
                       <StatusDot tone={s.tone}>{s.label}</StatusDot>
                     </p>
+                    {r.document_status !== "not_needed" && (
+                      <p className="mt-1 text-[13px] text-muted-foreground">
+                        {DOCUMENT_STATUS[r.document_status]?.label}
+                        {r.document_status === "needed" && r.document_due_on && `: add it by ${formatDate(r.document_due_on, active.date_format)}`}
+                      </p>
+                    )}
                     {r.decision_comment && r.status !== "approved" && <p className="mt-1 text-[13px] text-danger">Note: {r.decision_comment}</p>}
+                    {(r.document_status === "needed" || r.document_status === "overdue") && (
+                      <div className="mt-2">
+                        <AddDocumentButton requestId={r.id} businessId={active.business_id} employeeId={me.id} />
+                      </div>
+                    )}
                   </div>
                   {r.status === "pending" && approvalId && <CancelButton id={approvalId} />}
                 </li>

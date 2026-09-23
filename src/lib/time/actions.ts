@@ -140,12 +140,14 @@ const recordSchema = z.object({
   clock_out: z.union([z.literal(""), z.string().regex(/^\d{2}:\d{2}$/)]).default(""),
   status: z.enum(["auto", "absent", "on_leave", "holiday", "rest_day"]).default("auto"),
   notes: z.string().trim().max(500).optional(),
+  reason: z.string().trim().min(3, "Say why you're adding or changing this day. It's kept in the history.").max(300),
+  is_half_day: z.enum(["", "true"]).optional(),
 });
 
 /** Office users add or fix a day directly. Late, overtime and hours are worked out by the database. */
 export async function saveAttendanceRecord(_: ActionResult, form: FormData): Promise<ActionResult> {
   const active = await business();
-  const parsed = recordSchema.safeParse(Object.fromEntries(form.entries()));
+  const parsed = recordSchema.safeParse({ ...Object.fromEntries(form.entries()), is_half_day: form.getAll("is_half_day").includes("true") ? "true" : "" });
   if (!parsed.success) return { error: parsed.error.issues[0].message, fieldErrors: parsed.error.flatten().fieldErrors };
   const d = parsed.data;
   if (d.status === "auto" && !d.clock_in) return { error: "Enter a start time, or choose absent, on leave, holiday or rest day.", fieldErrors: { clock_in: ["Needed."] } };
@@ -163,14 +165,16 @@ export async function saveAttendanceRecord(_: ActionResult, form: FormData): Pro
     status: d.status === "auto" ? "present" : d.status,
     source: "manual",
     notes: d.notes || null,
+    edit_reason: d.reason,
+    is_half_day: d.status === "auto" && d.is_half_day === "true",
     ...(d.status !== "auto" ? { worked_minutes: 0, late_minutes: 0, overtime_minutes: 0, early_leave_minutes: 0, break_minutes: 0 } : {}),
   };
   const supabase = await createClient();
   const { error } = d.id
     ? await supabase.from("attendance_records").update(row).eq("id", d.id)
     : await supabase.from("attendance_records").upsert(row, { onConflict: "employee_id,work_date" });
-  if (error) return { error: error.code === "42501" ? "You don't have permission to change time records." : friendly(error.message) };
-  revalidatePath("/app/time");
+  if (error) return { error: error.code === "42501" && !/locked/.test(error.message) ? "You don't have permission to change time records." : friendly(error.message) };
+  revalidatePath("/app/time", "layout");
   return { ok: true, message: "Saved." };
 }
 

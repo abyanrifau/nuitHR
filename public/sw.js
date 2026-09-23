@@ -38,7 +38,9 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Build files never change once published, so keep them.
+  // Build files never change once published, so keep them. (Not on a
+  // development computer, where the same file names get new contents.)
+  if (self.location.hostname === "localhost" || self.location.hostname === "127.0.0.1") return;
   if (url.pathname.startsWith("/_next/static/") || url.pathname.startsWith("/icons/") || url.pathname.startsWith("/fonts/")) {
     event.respondWith(
       caches.open(STATIC).then(async (cache) => {

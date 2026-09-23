@@ -23,7 +23,7 @@ export const getStaffProfile = cache(async () => {
   if (!active.employee_id) return null;
   const { data } = await supabase
     .from("employees")
-    .select("id, branch_id, department_id, first_name, last_name, preferred_name, employee_code, status, phone, personal_email, work_email, current_address, permanent_address, join_date, position:positions(title), department:departments!employees_business_id_department_id_fkey(name), branch:branches(name)")
+    .select("id, branch_id, department_id, first_name, last_name, preferred_name, employee_code, status, photo_path, hide_birthday, phone, personal_email, work_email, current_address, permanent_address, join_date, position:positions(title), department:departments!employees_business_id_department_id_fkey(name), branch:branches(name)")
     .eq("id", active.employee_id)
     .maybeSingle();
   return data;

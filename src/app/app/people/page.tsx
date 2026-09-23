@@ -8,7 +8,8 @@ import { EmptyState, PageHeader } from "@/components/ui/page";
 import { Pagination, SortTh, StatusDot, Table, Td, Th, Tr } from "@/components/ui/table";
 import { getActiveBusiness, toAccessContext } from "@/lib/auth/session";
 import { createClient } from "@/lib/supabase/server";
-import { formatDate, fullName, initials } from "@/lib/format";
+import { Avatar } from "@/components/ui/avatar";
+import { formatDate, fullName } from "@/lib/format";
 import { statusMeta } from "@/lib/people/constants";
 import { PAGE_SIZE, peopleQuery } from "@/lib/people/query";
 import { can } from "@/modules/access";
@@ -23,6 +24,7 @@ interface Row {
   preferred_name: string | null;
   status: string;
   join_date: string | null;
+  photo_path: string | null;
   department: { name: string } | null;
   position: { title: string } | null;
   branch: { name: string } | null;
@@ -46,7 +48,7 @@ export default async function PeoplePage(props: PageProps<"/app/people">) {
       supabase,
       active.business_id,
       sp,
-      "id, employee_code, first_name, last_name, preferred_name, status, join_date, department:departments!employees_business_id_department_id_fkey(name), position:positions(title), branch:branches(name)",
+      "id, employee_code, first_name, last_name, preferred_name, status, join_date, photo_path, department:departments!employees_business_id_department_id_fkey(name), position:positions(title), branch:branches(name)",
       { count: true },
     ).range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1),
     supabase.from("departments").select("id, name").eq("business_id", active.business_id).order("name"),
@@ -140,9 +142,7 @@ export default async function PeoplePage(props: PageProps<"/app/people">) {
                   <Tr key={r.id}>
                     <Td>
                       <Link href={`/app/people/${r.id}`} className="flex items-center gap-3 hover:underline">
-                        <span className="grid size-8 shrink-0 place-items-center rounded-full border border-border text-[11px] text-muted-foreground">
-                          {initials(r)}
-                        </span>
+                        <Avatar name={fullName(r)} path={r.photo_path} size="sm" />
                         <span className="min-w-0">
                           <span className="block truncate text-foreground">{fullName(r)}</span>
                           <span className="block truncate text-[13px] text-subtle-foreground md:hidden">{r.position?.title ?? r.department?.name ?? ""}</span>

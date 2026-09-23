@@ -1,18 +1,21 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { ArrowLeft } from "lucide-react";
+import { PictureUpload } from "@/components/people/picture-upload";
 import { Alert } from "@/components/ui/alert";
+import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { DetailList, EmptyState, PageHeader } from "@/components/ui/page";
-import { StatusDot } from "@/components/ui/table";
-import { getActiveBusiness, toAccessContext } from "@/lib/auth/session";
+import { DetailList, EmptyState } from "@/components/ui/page";
+import { TabNav } from "@/components/ui/tab-nav";
+import { StatusDot, Table, Td, Th, Tr } from "@/components/ui/table";
+import { getActiveBusiness, toAccessContext, type BusinessAccess } from "@/lib/auth/session";
 import { createClient } from "@/lib/supabase/server";
 import { actionVerb, describeChanges, entityLabel } from "@/lib/audit";
-import { formatDate, formatDateTime, formatMoney, fullName, initials, titleCase, today } from "@/lib/format";
+import { formatDate, formatDateTime, formatMoney, fullName, lengthOfService, nextPayDay, titleCase, today } from "@/lib/format";
 import { CONTRACT_TYPES, GENDERS, NATIONALITIES, statusMeta } from "@/lib/people/constants";
 import { loadOrgOptions } from "@/lib/people/org-options";
-import { can } from "@/modules/access";
-import { cn } from "@/lib/utils";
+import { can, isEnabled } from "@/modules/access";
 import {
   BankPanel,
   CompensationPanel,
@@ -23,21 +26,26 @@ import {
   StatusPanel,
 } from "./profile-panels";
 import { PayExtrasPanel } from "./pay-extras";
+import { TimeTab } from "./time-tab";
 
 export const metadata: Metadata = { title: "Profile" };
 
 const TABS = [
+  { key: "overview", label: "Overview" },
   { key: "personal", label: "Personal" },
   { key: "job", label: "Job" },
-  { key: "emergency", label: "Emergency" },
-  { key: "id", label: "ID" },
-  { key: "pay", label: "Salary & bank", needs: "compensation" },
-  { key: "files", label: "Files", needs: "documents" },
-  { key: "login", label: "Login", needs: "users" },
+  { key: "pay", label: "Pay" },
+  { key: "time", label: "Time & attendance" },
+  { key: "leave", label: "Time off" },
+  { key: "claims", label: "Claims" },
+  { key: "documents", label: "Documents" },
   { key: "history", label: "History" },
 ] as const;
+type TabKey = (typeof TABS)[number]["key"];
+/** Links to the old tab names keep working. */
+const OLD_TABS: Record<string, TabKey> = { emergency: "personal", id: "personal", files: "documents", login: "job", pay: "pay" };
 
-const label = (list: readonly { value: string; label: string }[], v: string | null) => list.find((o) => o.value === v)?.label ?? v ?? "";
+const label = (list: readonly { value: string; label: string }[], v: string | null) => list.find((o) => o.value === v)?.label ?? titleCase(v);
 
 export default async function ProfilePage(props: PageProps<"/app/people/[id]">) {
   const { id } = await props.params;
@@ -61,53 +69,84 @@ export default async function ProfilePage(props: PageProps<"/app/people/[id]">) 
 
   const isSelf = active.employee_id === id;
   const canEdit = can(ctx, "employees", "edit");
-  const canSeePay = can(ctx, "compensation", "view");
-  const tabs = TABS.filter((t) => !("needs" in t) || can(ctx, t.needs, "view") || (t.needs === "documents" && isSelf));
-  const tab = tabs.find((t) => t.key === sp.tab)?.key ?? "personal";
+  // Pay is shown for people whose pay you can see: your own, or your team or company if the owner allowed it.
+  const canSeePay = isSelf ? can(ctx, "compensation", "view") : can(ctx, "compensation", "view", "team");
+  // Only tabs for switched-on tools and things this person is allowed to see.
+  const show: Record<TabKey, boolean> = {
+    overview: true,
+    personal: true,
+    job: true,
+    pay: canSeePay,
+    time: isEnabled(ctx, "attendance") && can(ctx, "attendance", "view"),
+    leave: isEnabled(ctx, "leave") && can(ctx, "leave", "view"),
+    claims: isEnabled(ctx, "claims") && can(ctx, "claims", "view"),
+    documents: can(ctx, "documents", "view") || isSelf,
+    history: true,
+  };
+  const tabs = TABS.filter((t) => show[t.key]);
+  const wanted = (sp.tab && (OLD_TABS[sp.tab] ?? sp.tab)) as TabKey | undefined;
+  const tab = tabs.find((t) => t.key === wanted)?.key ?? "overview";
   const status = statusMeta(e.status);
+  const day = today(active.timezone);
+  const position = (e.position as { title: string } | null)?.title;
+  const department = (e.department as { name: string } | null)?.name;
+  const branch = (e.branch as { name: string } | null)?.name;
+  const service = lengthOfService(e.join_date, e.exit_date && e.exit_date < day ? e.exit_date : day);
+  const name = fullName(e);
+  const reportsTo = manager ? (
+    <Link href={`/app/people/${manager.id}`} className="underline underline-offset-4">
+      {fullName(manager)}
+    </Link>
+  ) : null;
 
   return (
     <div>
-      <PageHeader
-        back={{ href: "/app/people", label: "People" }}
-        title={
-          <span className="flex items-center gap-4">
-            <span className="grid size-12 shrink-0 place-items-center rounded-full border border-border text-base text-muted-foreground">{initials(e)}</span>
-            <span className="min-w-0">
-              {fullName(e)}
-              <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 font-body text-sm text-muted-foreground">
-                <span>{(e.position as { title: string } | null)?.title ?? "No job title"}</span>
-                <span className="tabular">{e.employee_code}</span>
-                <StatusDot tone={status.tone}>{status.label}</StatusDot>
-              </span>
-            </span>
-          </span>
-        }
-      />
+      <Link href="/app/people" className="mb-4 inline-flex items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground">
+        <ArrowLeft className="size-3.5" aria-hidden /> People
+      </Link>
+      <header className="mb-8 flex flex-col gap-5 sm:flex-row sm:items-center">
+        {canEdit ? (
+          <PictureUpload target={id} name={name} path={e.photo_path} size="xl" />
+        ) : (
+          <Avatar name={name} path={e.photo_path} size="xl" />
+        )}
+        <div className="min-w-0">
+          <h1 className="text-3xl sm:text-4xl">{name}</h1>
+          <p className="mt-1 text-muted-foreground">{[position, department, branch].filter(Boolean).join(" · ") || "No job title yet"}</p>
+          <p className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[13px] text-muted-foreground">
+            <StatusDot tone={status.tone}>{status.label}</StatusDot>
+            {e.join_date && <span>Joined {formatDate(e.join_date, active.date_format)}</span>}
+            {service && <span>{service} of service</span>}
+            <span className="tabular">{e.employee_code}</span>
+          </p>
+        </div>
+      </header>
       {sp.added && (
         <Alert tone="success" className="mb-6" title="Person added">
-          Next, add their ID and bank details, upload their contract, or invite them to sign in from the Login tab.
+          Next, add their ID and bank details, upload their contract, or invite them to sign in from the Job tab.
         </Alert>
       )}
 
-      <nav aria-label="Profile sections" className="-mx-4 mb-8 overflow-x-auto border-b border-border px-4 [scrollbar-width:none]">
-        <ul className="flex gap-6">
-          {tabs.map((t) => (
-            <li key={t.key}>
-              <Link
-                href={`/app/people/${id}?tab=${t.key}`}
-                aria-current={t.key === tab ? "page" : undefined}
-                className={cn(
-                  "-mb-px block border-b py-3 text-sm whitespace-nowrap",
-                  t.key === tab ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {t.label}
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </nav>
+      <TabNav label="Profile sections" current={tab} tabs={tabs.map((t) => ({ key: t.key, label: t.label, href: `/app/people/${id}?tab=${t.key}` }))} />
+
+      {tab === "overview" && (
+        <OverviewTab
+          id={id}
+          active={active}
+          day={day}
+          showTime={show.time}
+          showLeave={show.leave}
+          showPayDay={isEnabled(ctx, "payroll")}
+          payScheduleId={e.pay_schedule_id}
+          facts={[
+            { label: "Reports to", value: reportsTo },
+            { label: "Work email", value: e.work_email },
+            { label: "Phone", value: e.phone },
+            { label: "Contract", value: label(CONTRACT_TYPES, e.contract_type) },
+            { label: "Probation ends", value: formatDate(e.probation_end_date, active.date_format) },
+          ]}
+        />
+      )}
 
       {tab === "personal" && (
         <div className="space-y-10">
@@ -150,6 +189,23 @@ export default async function ProfilePage(props: PageProps<"/app/people/[id]">) 
               />
             }
           />
+          <EmergencyTab id={id} canEdit={canEdit} />
+          <EditableSection
+            title="ID and passport"
+            employeeId={id}
+            section="id"
+            values={e}
+            canEdit={canEdit}
+            view={
+              <DetailList
+                items={[
+                  { label: "National ID card no.", value: e.national_id },
+                  { label: "Passport no.", value: e.passport_no },
+                  { label: "Passport expires", value: formatDate(e.passport_expiry, active.date_format) },
+                ]}
+              />
+            }
+          />
         </div>
       )}
 
@@ -167,17 +223,10 @@ export default async function ProfilePage(props: PageProps<"/app/people/[id]">) 
                 items={[
                   { label: "Employee number", value: e.employee_code },
                   { label: "Contract", value: label(CONTRACT_TYPES, e.contract_type) },
-                  { label: "Job title", value: (e.position as { title: string } | null)?.title },
-                  { label: "Department", value: (e.department as { name: string } | null)?.name },
-                  { label: "Location", value: (e.branch as { name: string } | null)?.name },
-                  {
-                    label: "Reports to",
-                    value: manager ? (
-                      <Link href={`/app/people/${manager.id}`} className="underline underline-offset-4">
-                        {fullName(manager)}
-                      </Link>
-                    ) : null,
-                  },
+                  { label: "Job title", value: position },
+                  { label: "Department", value: department },
+                  { label: "Location", value: branch },
+                  { label: "Reports to", value: reportsTo },
                   { label: "Joined on", value: formatDate(e.join_date, active.date_format) },
                   { label: "Probation ends", value: formatDate(e.probation_end_date, active.date_format) },
                   { label: "Confirmed on", value: formatDate(e.confirmation_date, active.date_format) },
@@ -194,33 +243,21 @@ export default async function ProfilePage(props: PageProps<"/app/people/[id]">) 
             exit={{ date: e.exit_date, reason: e.exit_reason, notes: e.exit_notes }}
             exitDateText={formatDate(e.exit_date, active.date_format)}
           />
+          {can(ctx, "users", "view") && (
+            <LoginTab id={id} businessId={active.business_id} canInvite={can(ctx, "users", "create")} isOwner={active.is_owner} email={e.work_email ?? e.personal_email ?? ""} />
+          )}
         </div>
-      )}
-
-      {tab === "emergency" && <EmergencyTab id={id} canEdit={canEdit} />}
-
-      {tab === "id" && (
-        <EditableSection
-          title="ID and passport"
-          employeeId={id}
-          section="id"
-          values={e}
-          canEdit={canEdit}
-          view={
-            <DetailList
-              items={[
-                { label: "National ID card no.", value: e.national_id },
-                { label: "Passport no.", value: e.passport_no },
-                { label: "Passport expires", value: formatDate(e.passport_expiry, active.date_format) },
-              ]}
-            />
-          }
-        />
       )}
 
       {tab === "pay" && canSeePay && <PayTab id={id} currency={active.currency} dateFormat={active.date_format} canEdit={can(ctx, "compensation", "edit")} canCreate={can(ctx, "compensation", "create")} />}
 
-      {tab === "files" && (
+      {tab === "time" && <TimeTab id={id} active={active} day={day} month={sp.month} />}
+
+      {tab === "leave" && <LeaveTab id={id} active={active} />}
+
+      {tab === "claims" && <ClaimsTab id={id} active={active} />}
+
+      {tab === "documents" && (
         <FilesTab
           id={id}
           businessId={active.business_id}
@@ -230,8 +267,6 @@ export default async function ProfilePage(props: PageProps<"/app/people/[id]">) 
           canDelete={can(ctx, "documents", "delete")}
         />
       )}
-
-      {tab === "login" && <LoginTab id={id} businessId={active.business_id} canInvite={can(ctx, "users", "create")} isOwner={active.is_owner} email={e.work_email ?? e.personal_email ?? ""} />}
 
       {tab === "history" && <HistoryTab id={id} dateFormat={active.date_format} timezone={active.timezone} showSensitive={canSeePay} />}
     </div>
@@ -386,5 +421,250 @@ async function HistoryTab({ id, dateFormat, timezone, showSensitive }: { id: str
         );
       })}
     </ol>
+  );
+}
+
+const LEAVE_STATUS: Record<string, { label: string; tone: "success" | "warning" | "danger" | "neutral" }> = {
+  pending: { label: "Waiting", tone: "warning" },
+  approved: { label: "Approved", tone: "success" },
+  rejected: { label: "Declined", tone: "danger" },
+  cancelled: { label: "Cancelled", tone: "neutral" },
+};
+const CLAIM_STATUS: Record<string, { label: string; tone: "success" | "warning" | "danger" | "neutral" | "info" }> = {
+  pending: { label: "Waiting", tone: "warning" },
+  approved: { label: "Approved", tone: "info" },
+  paid: { label: "Paid", tone: "success" },
+  rejected: { label: "Declined", tone: "danger" },
+  cancelled: { label: "Cancelled", tone: "neutral" },
+};
+const days = (v: number | string) => {
+  const x = Number(v);
+  return Number.isInteger(x) ? String(x) : x.toFixed(1);
+};
+
+function Figure({ label, value, caption }: { label: string; value: string; caption?: string }) {
+  return (
+    <div className="rounded-xl border border-border bg-surface p-5">
+      <p className="text-[13px] text-muted-foreground">{label}</p>
+      <p className="font-display mt-3 text-3xl tabular">{value}</p>
+      {caption && <p className="mt-1 text-[13px] text-subtle-foreground">{caption}</p>}
+    </div>
+  );
+}
+
+/** Key numbers at a glance: this month's attendance, time off left, next pay day. */
+async function OverviewTab({
+  id,
+  active,
+  day,
+  showTime,
+  showLeave,
+  showPayDay,
+  payScheduleId,
+  facts,
+}: {
+  id: string;
+  active: BusinessAccess;
+  day: string;
+  showTime: boolean;
+  showLeave: boolean;
+  showPayDay: boolean;
+  payScheduleId: string | null;
+  facts: { label: string; value: React.ReactNode }[];
+}) {
+  const supabase = await createClient();
+  const monthStart = `${day.slice(0, 7)}-01`;
+  const none = Promise.resolve({ data: null, count: null });
+  const [month, balances, schedule] = await Promise.all([
+    // This month's numbers, brought up to date first (the same numbers payroll uses).
+    showTime
+      ? supabase
+          .rpc("refresh_attendance_month", { p_business: active.business_id, p_month: monthStart, p_employee: id })
+          .then(() => supabase.from("attendance_months").select("days_present, half_days, late_count, unapproved_absences").eq("employee_id", id).eq("month", monthStart).maybeSingle())
+      : none,
+    showLeave ? supabase.rpc("employee_leave_balances", { p_business: active.business_id, p_employee: id }) : none,
+    showPayDay
+      ? payScheduleId
+        ? supabase.from("pay_schedules").select("pay_day").eq("id", payScheduleId).maybeSingle()
+        : supabase.from("pay_schedules").select("pay_day").eq("business_id", active.business_id).eq("is_default", true).maybeSingle()
+      : none,
+  ]);
+  const monthName = new Intl.DateTimeFormat("en-GB", { month: "long", timeZone: "UTC" }).format(new Date(`${monthStart}T00:00:00Z`));
+  const leaveRows = ((balances.data ?? []) as { leave_type_id: string; name: string; color: string; accrual_method: string; balance: number; pending: number }[]).filter(
+    (b) => b.accrual_method !== "none",
+  );
+  const payDay = (schedule.data as { pay_day: number } | null)?.pay_day;
+  const m = month.data as { days_present: number; half_days: number; late_count: number; unapproved_absences: number } | null;
+  const next = payDay ? nextPayDay(payDay, day) : null;
+
+  return (
+    <div className="space-y-10">
+      {(showTime || next) && (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {showTime && (
+            <Figure
+              label={`Days present in ${monthName}`}
+              value={String(m?.days_present ?? 0)}
+              caption={[m?.half_days ? `plus ${m.half_days} half ${m.half_days === 1 ? "day" : "days"}` : "", m?.unapproved_absences ? `${m.unapproved_absences} absent` : ""].filter(Boolean).join(" · ") || "So far this month"}
+            />
+          )}
+          {showTime && <Figure label={`Late in ${monthName}`} value={String(m?.late_count ?? 0)} caption={m?.late_count ? "Days they arrived late" : "On time every day"} />}
+          {next && (
+            <Figure
+              label="Next pay day"
+              value={formatDate(next.date, active.date_format)}
+              caption={next.days === 0 ? "Today" : `In ${next.days} ${next.days === 1 ? "day" : "days"}`}
+            />
+          )}
+        </div>
+      )}
+      {showLeave && (
+        <section>
+          <h2 className="mb-3 text-lg">Time off left this year</h2>
+          {leaveRows.length ? (
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              {leaveRows.map((b) => (
+                <div key={b.leave_type_id} className="rounded-xl border border-border p-4">
+                  <p className="flex items-center gap-2 text-[13px] text-muted-foreground">
+                    <span className="size-2 rounded-full" style={{ background: b.color }} aria-hidden /> {b.name}
+                  </p>
+                  <p className="font-display mt-2 text-2xl tabular">
+                    {days(b.balance)} <span className="text-sm text-subtle-foreground">days</span>
+                  </p>
+                  {Number(b.pending) > 0 && <p className="text-[12px] text-subtle-foreground">{days(b.pending)} waiting for approval</p>}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No time off types that build up yet.</p>
+          )}
+        </section>
+      )}
+      <section>
+        <h2 className="mb-3 text-lg">At a glance</h2>
+        <DetailList items={facts} />
+      </section>
+    </div>
+  );
+}
+
+/** Balances and their time off requests. */
+async function LeaveTab({ id, active }: { id: string; active: BusinessAccess }) {
+  const supabase = await createClient();
+  const [{ data: balances }, { data: requests }] = await Promise.all([
+    supabase.rpc("employee_leave_balances", { p_business: active.business_id, p_employee: id }),
+    supabase.from("leave_requests").select("id, start_date, end_date, days, status, reason, type:leave_types(name, color)").eq("employee_id", id).order("start_date", { ascending: false }).limit(30),
+  ]);
+  const rows = (balances ?? []) as { leave_type_id: string; name: string; color: string; accrual_method: string; balance: number; taken: number; pending: number }[];
+  return (
+    <div className="space-y-10">
+      {rows.length > 0 && (
+        <Table>
+          <thead>
+            <tr>
+              <Th>Type</Th>
+              <Th className="text-right">Left</Th>
+              <Th className="text-right">Taken</Th>
+              <Th className="text-right">Waiting</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((b) => (
+              <Tr key={b.leave_type_id}>
+                <Td>
+                  <span className="flex items-center gap-2">
+                    <span className="size-2 rounded-full" style={{ background: b.color }} aria-hidden /> {b.name}
+                  </span>
+                </Td>
+                <Td className="text-right tabular">{b.accrual_method === "none" ? "–" : days(b.balance)}</Td>
+                <Td className="text-right tabular">{days(b.taken)}</Td>
+                <Td className="text-right tabular">{days(b.pending)}</Td>
+              </Tr>
+            ))}
+          </tbody>
+        </Table>
+      )}
+      <section>
+        <h2 className="mb-3 text-lg">Requests</h2>
+        {requests?.length ? (
+          <Table>
+            <thead>
+              <tr>
+                <Th>When</Th>
+                <Th>Type</Th>
+                <Th className="text-right">Days</Th>
+                <Th>Status</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {requests.map((r) => {
+                const t = r.type as unknown as { name: string; color: string } | null;
+                const s = LEAVE_STATUS[r.status] ?? LEAVE_STATUS.pending;
+                return (
+                  <Tr key={r.id}>
+                    <Td className="tabular">
+                      {formatDate(r.start_date, active.date_format)}
+                      {r.end_date !== r.start_date && <span className="block text-[12px] text-subtle-foreground">to {formatDate(r.end_date, active.date_format)}</span>}
+                    </Td>
+                    <Td>
+                      {t?.name}
+                      {r.reason && <span className="block text-[12px] text-subtle-foreground">{r.reason}</span>}
+                    </Td>
+                    <Td className="text-right tabular">{days(r.days)}</Td>
+                    <Td>
+                      <StatusDot tone={s.tone}>{s.label}</StatusDot>
+                    </Td>
+                  </Tr>
+                );
+              })}
+            </tbody>
+          </Table>
+        ) : (
+          <EmptyState title="No time off yet" description="Time off they ask for, or that you enter for them, shows here." />
+        )}
+      </section>
+    </div>
+  );
+}
+
+/** Their claims. */
+async function ClaimsTab({ id, active }: { id: string; active: BusinessAccess }) {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("claims")
+    .select("id, claim_date, amount, currency, status, description, route, type:claim_types(name)")
+    .eq("employee_id", id)
+    .order("claim_date", { ascending: false })
+    .limit(30);
+  if (!data?.length) return <EmptyState title="No claims yet" description="Claims they send from the staff app show here." />;
+  return (
+    <Table>
+      <thead>
+        <tr>
+          <Th>Date</Th>
+          <Th>What</Th>
+          <Th className="text-right">Amount</Th>
+          <Th>Status</Th>
+        </tr>
+      </thead>
+      <tbody>
+        {data.map((c) => {
+          const s = CLAIM_STATUS[c.status] ?? CLAIM_STATUS.pending;
+          return (
+            <Tr key={c.id}>
+              <Td className="tabular">{formatDate(c.claim_date, active.date_format)}</Td>
+              <Td>
+                {(c.type as unknown as { name: string } | null)?.name}
+                {(c.route || c.description) && <span className="block text-[12px] text-subtle-foreground">{[c.route, c.description].filter(Boolean).join(" · ")}</span>}
+              </Td>
+              <Td className="text-right tabular">{formatMoney(c.amount, c.currency)}</Td>
+              <Td>
+                <StatusDot tone={s.tone}>{s.label}</StatusDot>
+              </Td>
+            </Tr>
+          );
+        })}
+      </tbody>
+    </Table>
   );
 }

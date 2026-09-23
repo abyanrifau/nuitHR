@@ -2,16 +2,19 @@ import type { Metadata } from "next";
 import { Alert } from "@/components/ui/alert";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveBusiness, getSessionUser, toAccessContext } from "@/lib/auth/session";
-import { can, dashboardWidgets, enabledModules } from "@/modules/access";
+import { can, dashboardWidgets, enabledModules, isEnabled } from "@/modules/access";
+import { Celebrations } from "@/components/people/celebrations";
+import { today } from "@/lib/format";
+import { TodayPanel } from "./today-panel";
 import { cn } from "@/lib/utils";
 import { GettingStarted, type ChecklistGroup } from "./getting-started";
 import { loadWidgetValues, type WidgetValue } from "./home-data";
 
 export const metadata: Metadata = { title: "Home" };
 
+// Today comes first, as its own panel with names and pictures (see today-panel.tsx).
 const SECTIONS = [
   { key: "attention", label: "Needs your attention" },
-  { key: "today", label: "Today" },
   { key: "month", label: "This month" },
 ] as const;
 
@@ -31,7 +34,8 @@ export default async function Home({ searchParams }: PageProps<"/app">) {
   const ctx = toAccessContext(b);
   const supabase = await createClient();
 
-  const widgets = dashboardWidgets(ctx).filter((w) => w.key !== "setup_checklist");
+  const widgets = dashboardWidgets(ctx).filter((w) => w.key !== "setup_checklist" && w.section !== "today");
+  const day = today(b.timezone);
   const [{ data: profile }, { data: status }, values] = await Promise.all([
     supabase.from("profiles").select("full_name").eq("id", user!.id).maybeSingle(),
     supabase.rpc("get_setup_checklist", { p_business: b.business_id }),
@@ -65,6 +69,17 @@ export default async function Home({ searchParams }: PageProps<"/app">) {
           {b.business_name} · {b.role_name}
         </p>
       </div>
+
+      <TodayPanel
+        businessId={b.business_id}
+        today={day}
+        timezone={b.timezone}
+        attendance={isEnabled(ctx, "attendance") && can(ctx, "attendance", "view")}
+        roster={isEnabled(ctx, "attendance") && can(ctx, "roster", "view")}
+        leave={isEnabled(ctx, "leave") && can(ctx, "leave", "view")}
+      />
+
+      <Celebrations businessId={b.business_id} dateFormat={b.date_format} today={day} newsHref="/app/news" />
 
       {SECTIONS.map((s) => {
         const list = widgets.filter((w) => w.section === s.key);

@@ -25,6 +25,8 @@ const s = StyleSheet.create({
   row: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 2.5 },
   total: { flexDirection: "row", justifyContent: "space-between", borderTopWidth: 0.5, borderTopColor: "#999999", paddingTop: 4, marginTop: 4, fontFamily: "Helvetica-Bold" },
   net: { marginTop: 18, padding: 10, borderWidth: 1, borderColor: "#111111", flexDirection: "row", justifyContent: "space-between", fontFamily: "Helvetica-Bold", fontSize: 12 },
+  why: { fontSize: 7, color: "#777777", marginTop: 1, maxWidth: 190 },
+  ytd: { marginTop: 14, borderTopWidth: 0.5, borderTopColor: "#999999", paddingTop: 8, flexDirection: "row", gap: 12 },
   credit: { position: "absolute", bottom: 14, left: 40, right: 40, fontSize: 6, color: "#aaaaaa", textAlign: "center" },
   foot: { position: "absolute", bottom: 28, left: 40, right: 40, fontSize: 7.5, color: "#777777", textAlign: "center" },
 });
@@ -37,6 +39,7 @@ interface Line {
   amount: number | string;
   quantity: number | string | null;
   sort: number;
+  explanation?: string | null;
 }
 
 export interface PayslipData {
@@ -57,9 +60,23 @@ export interface PayslipData {
     employer_contributions: number | string;
   };
   lines: Line[];
+  /** Totals so far this year, including this payslip. */
+  ytd?: { gross: number; tax: number; pension: number; net: number; year: string } | null;
 }
 
-function Payslip({ company, run, person, lines }: PayslipData) {
+function LineRow({ l }: { l: Line }) {
+  return (
+    <View style={s.row} wrap={false}>
+      <View style={{ flex: 1, paddingRight: 8 }}>
+        <Text>{l.name}</Text>
+        {l.explanation ? <Text style={s.why}>{l.explanation}</Text> : null}
+      </View>
+      <Text>{money(l.amount)}</Text>
+    </View>
+  );
+}
+
+function Payslip({ company, run, person, lines, ytd }: PayslipData) {
   const f = (d: string) => formatDate(d, company.date_format);
   const earnings = lines.filter((l) => l.kind === "earning");
   const deductions = lines.filter((l) => l.kind === "deduction");
@@ -106,10 +123,7 @@ function Payslip({ company, run, person, lines }: PayslipData) {
               <Text>Amount</Text>
             </View>
             {earnings.map((l, i) => (
-              <View key={i} style={s.row}>
-                <Text>{l.name}</Text>
-                <Text>{money(l.amount)}</Text>
-              </View>
+              <LineRow key={i} l={l} />
             ))}
             <View style={s.total}>
               <Text>Total earnings</Text>
@@ -122,10 +136,7 @@ function Payslip({ company, run, person, lines }: PayslipData) {
               <Text>Amount</Text>
             </View>
             {deductions.map((l, i) => (
-              <View key={i} style={s.row}>
-                <Text>{l.name}</Text>
-                <Text>{money(l.amount)}</Text>
-              </View>
+              <LineRow key={i} l={l} />
             ))}
             <View style={s.total}>
               <Text>Total deductions</Text>
@@ -139,6 +150,21 @@ function Payslip({ company, run, person, lines }: PayslipData) {
             {company.currency} {money(person.net_pay)}
           </Text>
         </View>
+        {ytd && (
+          <View style={s.ytd} wrap={false}>
+            {[
+              [`Earnings ${ytd.year} so far`, ytd.gross],
+              ["Income tax so far", ytd.tax],
+              ["Pension so far", ytd.pension],
+              ["Net pay so far", ytd.net],
+            ].map(([k, v]) => (
+              <View key={k as string} style={{ flex: 1 }}>
+                <Text style={s.label}>{k}</Text>
+                <Text>{money(v as number)}</Text>
+              </View>
+            ))}
+          </View>
+        )}
         {employer.length > 0 && (
           <View style={{ marginTop: 14 }}>
             <Text style={s.label}>Paid by {company.name} on top of your pay</Text>
@@ -175,7 +201,7 @@ export async function payslipPdf(supabase: SupabaseClient, runEmployeeId: string
   if (!pe) return null;
   const run = pe.run as { name: string; period_start: string; period_end: string; pay_date: string; business_id: string };
   const [{ data: lines }, { data: b }] = await Promise.all([
-    supabase.from("payroll_run_lines").select("name, kind, amount, quantity, sort").eq("run_employee_id", pe.id).order("sort"),
+    supabase.from("payroll_run_lines").select("name, kind, amount, quantity, sort, explanation").eq("run_employee_id", pe.id).order("sort").order("name"),
     supabase.from("businesses").select("name, address, logo_path, currency, date_format, letterhead_footer").eq("id", run.business_id).single(),
   ]);
   let logo: string | null = null;
@@ -183,11 +209,31 @@ export async function payslipPdf(supabase: SupabaseClient, runEmployeeId: string
     const { data } = await supabase.storage.from("tenant-files").download(b.logo_path);
     if (data && /png|jpe?g/.test(data.type)) logo = `data:${data.type};base64,${Buffer.from(await data.arrayBuffer()).toString("base64")}`;
   }
+  // Year to date: this person's finalized or paid runs this calendar year, up to this one.
+  const year = run.pay_date.slice(0, 4);
+  const { data: soFar } = await supabase
+    .from("payroll_run_employees")
+    .select("id, gross_pay, net_pay, run:payroll_runs!inner(status, pay_date)")
+    .eq("employee_id", pe.employee_id)
+    .in("run.status", ["finalized", "paid"])
+    .gte("run.pay_date", `${year}-01-01`)
+    .lte("run.pay_date", run.pay_date);
+  const ids = [...new Set([...(soFar ?? []).map((x) => x.id), pe.id])];
+  const { data: stat } = await supabase.from("payroll_run_lines").select("code, amount").in("run_employee_id", ids).in("code", ["TAX", "PENSION"]);
+  const counted = new Set((soFar ?? []).map((x) => x.id));
+  const ytd = {
+    year,
+    gross: (soFar ?? []).reduce((a, x) => a + Number(x.gross_pay), 0) + (counted.has(pe.id) ? 0 : Number(pe.gross_pay)),
+    net: (soFar ?? []).reduce((a, x) => a + Number(x.net_pay), 0) + (counted.has(pe.id) ? 0 : Number(pe.net_pay)),
+    tax: (stat ?? []).filter((l) => l.code === "TAX").reduce((a, l) => a + Number(l.amount), 0),
+    pension: (stat ?? []).filter((l) => l.code === "PENSION").reduce((a, l) => a + Number(l.amount), 0),
+  };
   const pdf = await renderPayslipPdf({
     company: { name: b?.name ?? "", address: b?.address ?? null, logo, currency: b?.currency ?? "MVR", date_format: b?.date_format ?? "DD/MM/YYYY", footer: b?.letterhead_footer ?? null },
     run,
     person: pe,
     lines: (lines ?? []) as Line[],
+    ytd,
   });
   const fileName = `Payslip ${run.period_start.slice(0, 7)} ${pe.employee_name}`.replace(/[^\w\- ]+/g, "") + ".pdf";
   return { pdf, fileName };

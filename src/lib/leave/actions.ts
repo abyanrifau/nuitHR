@@ -60,30 +60,70 @@ export async function requestLeave(input: unknown): Promise<ActionResult> {
   return { ok: true, message: "Sent for approval." };
 }
 
-/** How many days a request would use (working days only). Shown before sending. */
-export async function previewLeaveDays(input: unknown): Promise<{ days?: number; error?: string }> {
+export interface LeavePreview {
+  ok?: boolean;
+  days?: number;
+  error?: string;
+  document?: "none" | "attached" | "later";
+  document_due?: string | null;
+}
+
+/** Checks a request against every rule of its type before it's sent: days used, what's needed, or why it can't be asked. */
+export async function previewLeave(input: unknown, hasDocument: boolean): Promise<LeavePreview> {
   const active = await business();
   const parsed = requestSchema.safeParse(input);
   if (!parsed.success) return { error: parsed.error.issues[0].message };
   const d = parsed.data;
   if (d.end_date < d.start_date) return { error: "The last day must be on or after the first day." };
   const supabase = await createClient();
-  // Worked out on the server with the same rules the request uses.
-  const { data: types } = await supabase.from("leave_types").select("counts_rest_days, counts_public_holidays").eq("id", d.leave_type_id).maybeSingle();
-  const { data: b } = await supabase.from("businesses").select("working_days").eq("id", active.business_id).single();
-  const { data: holidays } = await supabase.from("public_holidays").select("holiday_date").eq("business_id", active.business_id).eq("is_optional", false).gte("holiday_date", d.start_date).lte("holiday_date", d.end_date);
-  const hol = new Set((holidays ?? []).map((h) => h.holiday_date));
-  const working = new Set<number>((b?.working_days as number[]) ?? [0, 1, 2, 3, 4]);
-  let days = 0;
-  for (let t = new Date(`${d.start_date}T00:00:00Z`); t <= new Date(`${d.end_date}T00:00:00Z`); t = new Date(t.getTime() + 86400000)) {
-    const iso = t.toISOString().slice(0, 10);
-    let counts = working.has(t.getUTCDay()) || Boolean(types?.counts_rest_days);
-    if (counts && !types?.counts_public_holidays && hol.has(iso)) counts = false;
-    if (!counts) continue;
-    const single = d.start_date === d.end_date;
-    days += (iso === d.start_date && d.start_half !== "full") || (!single && iso === d.end_date && d.end_half !== "full") ? 0.5 : 1;
+  const { data, error } = await supabase.rpc("preview_my_leave", {
+    p_business: active.business_id,
+    p_type: d.leave_type_id,
+    p_start: d.start_date,
+    p_end: d.end_date,
+    p_start_half: d.start_half,
+    p_end_half: d.start_date === d.end_date ? d.start_half : d.end_half,
+    p_has_document: hasDocument,
+  });
+  if (error) return { error: friendly(error.message) };
+  return data as LeavePreview;
+}
+
+/** Adds the document for time off already asked for (the file is uploaded from the browser first). */
+export async function attachLeaveDocument(requestId: string, path: string): Promise<ActionResult> {
+  await business();
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("attach_leave_document", { p_request: requestId, p_path: path });
+  if (error) {
+    await supabase.storage.from("tenant-files").remove([path]);
+    return { error: friendly(error.message) };
   }
-  return { days };
+  refresh();
+  return { ok: true, message: "Document added." };
+}
+
+/** HR gives more time for a document. Undoes the absence if the deadline had already passed. */
+export async function extendLeaveDocument(requestId: string, due: string, reason: string): Promise<ActionResult> {
+  const active = await business();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(due)) return { error: "Choose the new deadline." };
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("extend_leave_document", { p_request: requestId, p_due: due, p_reason: reason });
+  if (error) return { error: friendly(error.message) };
+  sendEmailsAfterResponse(active.business_id);
+  refresh();
+  revalidatePath("/app/time", "layout");
+  return { ok: true, message: "New deadline saved." };
+}
+
+/** HR decides the document isn't needed. Undoes the absence if the deadline had already passed. */
+export async function waiveLeaveDocument(requestId: string, reason: string): Promise<ActionResult> {
+  await business();
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("waive_leave_document", { p_request: requestId, p_reason: reason });
+  if (error) return { error: friendly(error.message) };
+  refresh();
+  revalidatePath("/app/time", "layout");
+  return { ok: true, message: "Saved. The time off stands without a document." };
 }
 
 const recordSchema = requestSchema.extend({ employee_id: z.string().uuid("Choose a person.") });
@@ -148,7 +188,7 @@ export async function startLeaveYear(year: number): Promise<ActionResult> {
   const { error } = await supabase.rpc("start_leave_year", { p_business: active.business_id, p_year: year });
   if (error) return { error: friendly(error.message) };
   refresh();
-  return { ok: true, message: `${year} is set up. Unused days were carried over up to each type's limit.` };
+  return { ok: true, message: `${year} is set up. Everyone has their full days for the year.` };
 }
 
 /** Decide time off straight from the Time off page, using the same approval steps as the Requests list. */
@@ -162,4 +202,13 @@ export async function decideLeave(leaveId: string, decision: "approve" | "reject
   sendEmailsAfterResponse(active.business_id);
   refresh();
   return { ok: true, message: decision === "approve" ? "Approved." : "Declined." };
+}
+
+/** A short-lived link to open a time off document. */
+export async function leaveDocumentLink(path: string): Promise<{ url?: string; error?: string }> {
+  const active = await business();
+  if (!path.startsWith(`${active.business_id}/leave/`)) return { error: "You can't open this document." };
+  const supabase = await createClient();
+  const { data } = await supabase.storage.from("tenant-files").createSignedUrl(path, 120);
+  return data ? { url: data.signedUrl } : { error: "You can't open this document." };
 }

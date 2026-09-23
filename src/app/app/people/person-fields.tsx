@@ -1,5 +1,5 @@
 import { CheckboxField, SelectField, TextareaField, TextField } from "@/components/ui/action-form";
-import { CONTRACT_TYPES, GENDERS, NATIONALITIES } from "@/lib/people/constants";
+import { CONTRACT_TYPES, GENDERS, MARITAL_STATUSES, NATIONALITIES } from "@/lib/people/constants";
 
 export interface OrgOptions {
   branches: { value: string; label: string }[];
@@ -19,7 +19,7 @@ export function PersonalFields({ values = {} }: { values?: Values }) {
       <TextField name="preferred_name" label="Goes by" hint="If they use a different first name." defaultValue={v(values, "preferred_name")} optional />
       <SelectField name="gender" label="Gender" options={GENDERS} placeholder="Not set" defaultValue={v(values, "gender")} optional />
       <TextField name="date_of_birth" label="Date of birth" type="date" defaultValue={v(values, "date_of_birth")} optional />
-      <TextField name="marital_status" label="Marital status" defaultValue={v(values, "marital_status")} optional />
+      <SelectField name="marital_status" label="Marital status" options={MARITAL_STATUSES} placeholder="Not set" defaultValue={v(values, "marital_status")} optional />
       <SelectField name="nationality" label="Nationality" options={NATIONALITIES} placeholder="Not set" defaultValue={v(values, "nationality")} optional />
       <div className="flex items-end pb-2">
         <CheckboxField name="is_expatriate" label="Works here on a permit" hint="Foreign staff who need a work visa." defaultChecked={Boolean(values.is_expatriate)} />

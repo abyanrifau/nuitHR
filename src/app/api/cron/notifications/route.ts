@@ -21,6 +21,9 @@ export async function GET(req: NextRequest) {
   if (error) console.error("compliance reminders failed", error.message);
   const { data: courses, error: learnErr } = await createAdminClient().rpc("send_learning_reminders");
   if (learnErr) console.error("course reminders failed", learnErr.message);
+  // Leave documents: reminders the day before they're due; missing ones turn the days into absences.
+  const { data: leaveDocs, error: docErr } = await createAdminClient().rpc("run_leave_document_checks");
+  if (docErr) console.error("leave document checks failed", docErr.message);
   let billing = 0;
   try {
     billing = await sendBillingReminders();
@@ -30,5 +33,5 @@ export async function GET(req: NextRequest) {
   // Keeps support access in line with the PLATFORM_ADMIN_EMAILS setting.
   await syncPlatformAdmins();
   const result = await deliverPendingEmails({ sinceMinutes: 60 * 26 });
-  return NextResponse.json({ ...result, reminders: reminders ?? 0, courseReminders: courses ?? 0, billingReminders: billing });
+  return NextResponse.json({ ...result, reminders: reminders ?? 0, courseReminders: courses ?? 0, leaveDocuments: leaveDocs ?? 0, billingReminders: billing });
 }

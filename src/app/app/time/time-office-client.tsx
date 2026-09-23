@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Check, Pencil, Plus } from "lucide-react";
-import { ActionForm, SelectField, TextField } from "@/components/ui/action-form";
+import { ActionForm, CheckboxField, SelectField, TextField } from "@/components/ui/action-form";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { clearFlag, saveAttendanceRecord } from "@/lib/time/actions";
@@ -52,7 +52,7 @@ export function DayRecordButton({
   employee: { id: string; name: string };
   day: string;
   shifts: Opt[];
-  record: { id: string; clock_in: string; clock_out: string; shift_id: string | null; status: string; notes: string | null } | null;
+  record: { id: string; clock_in: string; clock_out: string; shift_id: string | null; status: string; notes: string | null; is_half_day?: boolean } | null;
 }) {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState(record?.status ?? "auto");
@@ -80,10 +80,12 @@ export function DayRecordButton({
                 <TextField name="clock_in" label="Started" type="time" defaultValue={record?.clock_in ?? ""} />
                 <TextField name="clock_out" label="Finished" type="time" defaultValue={record?.clock_out ?? ""} optional />
               </div>
-              <SelectField name="shift_id" label="Shift" options={shifts} placeholder="No shift" defaultValue={record?.shift_id ?? ""} optional hint="Used to work out lateness and overtime." />
+              <SelectField name="shift_id" label="Shift" options={shifts} placeholder="Their usual shift" defaultValue={record?.shift_id ?? ""} optional hint="Used to work out lateness and overtime." />
+              <CheckboxField name="is_half_day" label="Count this day as a half day" defaultChecked={record?.is_half_day ?? false} />
             </>
           )}
           <TextField name="notes" label="Note" defaultValue={record?.notes ?? ""} optional />
+          <TextField name="reason" label="Reason for the change" placeholder="For example forgot to clock out, confirmed by manager" hint="Kept in the history with your name." />
         </ActionForm>
       </Modal>
     </>

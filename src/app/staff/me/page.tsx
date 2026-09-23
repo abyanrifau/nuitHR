@@ -9,7 +9,9 @@ import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { NotificationPrefs, TwoStepPanel } from "@/app/app/account/account-forms";
 import { signOut } from "@/lib/auth/actions";
 import { getStaffContext, getStaffProfile } from "@/lib/staff/context";
-import { formatDate, fullName, initials } from "@/lib/format";
+import { formatDate, fullName } from "@/lib/format";
+import { Avatar } from "@/components/ui/avatar";
+import { BirthdayToggle } from "@/components/people/birthday-toggle";
 import { notificationEvents } from "@/modules/access";
 import { MyContactForm, MyEmergencyContacts } from "../staff-client";
 
@@ -37,7 +39,7 @@ export default async function StaffMe() {
   return (
     <div className="space-y-10">
       <div className="flex items-center gap-4">
-        <span className="grid size-14 shrink-0 place-items-center rounded-full border border-border text-lg text-muted-foreground">{me ? initials(me) : "?"}</span>
+        <Avatar name={me ? fullName(me) : user.email} path={me?.photo_path} size="lg" />
         <div className="min-w-0">
           <h1 className="truncate text-2xl">{me ? fullName(me) : user.email}</h1>
           <p className="text-sm text-muted-foreground">{[position, department].filter(Boolean).join(" · ") || active.role_name}</p>
@@ -84,6 +86,15 @@ export default async function StaffMe() {
         </>
       ) : (
         <Alert tone="warning">Your login isn&apos;t linked to a staff profile yet. Ask HR to link it in People &amp; access.</Alert>
+      )}
+
+      {me && (
+        <section aria-labelledby="celebrate">
+          <h2 id="celebrate" className="section-label mb-3">
+            celebrations
+          </h2>
+          <BirthdayToggle hidden={me.hide_birthday} />
+        </section>
       )}
 
       <section aria-labelledby="notif">

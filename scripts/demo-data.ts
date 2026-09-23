@@ -20,6 +20,7 @@ import { readFileSync } from "node:fs";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { defaultRolesPayload } from "../src/modules/roles";
 import { CORE_MODULE_KEYS } from "../src/modules/registry";
+import { TEMPLATES } from "../src/lib/payroll/pay-items";
 
 const MARKER = "SAMPLE-DATA";
 const NAME = "Coral Bay Resort";
@@ -87,17 +88,20 @@ async function remove(email: string) {
   const { data: list } = await admin.from("businesses").select("id, name").eq("registration_no", MARKER).eq("created_by", userId);
   if (!list?.length) return console.log("There's no sample company in that account.");
   for (const b of list) {
-    const files: string[] = [];
-    const walk = async (prefix: string) => {
-      const { data } = await admin.storage.from("tenant-files").list(prefix, { limit: 1000 });
-      for (const o of data ?? []) {
-        const path = `${prefix}/${o.name}`;
-        if (o.id) files.push(path);
-        else await walk(path);
-      }
-    };
-    await walk(b.id);
-    if (files.length) await admin.storage.from("tenant-files").remove(files);
+    // Company files, and profile pictures added for its people.
+    for (const bucket of ["tenant-files", "avatars"]) {
+      const files: string[] = [];
+      const walk = async (prefix: string) => {
+        const { data } = await admin.storage.from(bucket).list(prefix, { limit: 1000 });
+        for (const o of data ?? []) {
+          const path = `${prefix}/${o.name}`;
+          if (o.id) files.push(path);
+          else await walk(path);
+        }
+      };
+      await walk(b.id);
+      if (files.length) await admin.storage.from(bucket).remove(files);
+    }
     must("Delete company", await admin.from("businesses").delete().eq("id", b.id));
     console.log(`Removed ${b.name}.`);
   }
@@ -307,8 +311,52 @@ async function create(email: string) {
   const shift = Object.fromEntries(shifts.map((s) => [s.code, s.id])) as Record<string, string>;
   const shiftFor = (p: P, i: number) => (p.branch === "male" ? "OF" : i % 2 ? "PM" : "AM");
   const times: Record<string, [string, string]> = { AM: ["07:00", "15:00"], PM: ["15:00", "23:00"], OF: ["08:00", "16:00"] };
+  // Work schedules: the resort works six days with Friday off; the Malé office Sunday to Thursday.
+  const scheds = rows(
+    "Work schedules",
+    await admin
+      .from("work_schedules")
+      .insert([
+        { business_id: bid, name: "Six days, Friday off", working_days: [0, 1, 2, 3, 4, 6], shift_id: shift.AM, is_default: true },
+        { business_id: bid, name: "Office, Sunday to Thursday", working_days: [0, 1, 2, 3, 4], shift_id: shift.OF, is_default: false },
+      ])
+      .select("id, name"),
+  );
+  const officeSched = scheds.find((s) => s.name.startsWith("Office"))!.id;
+  must(
+    "Office schedule",
+    await admin
+      .from("employees")
+      .update({ work_schedule_id: officeSched })
+      .in(
+        "id",
+        people.filter((p) => p.branch === "male").map((p) => emp[p.code]),
+      ),
+  );
+  // Rules: overtime needs a manager's approval, rounded down to 15 minutes, up to 40 hours a month.
+  const { data: pol } = await admin.from("attendance_policies").select("id").eq("business_id", bid).eq("is_default", true).maybeSingle();
+  const rules = { overtime_requires_approval: true, overtime_rounding: "down", overtime_round_to: 15, overtime_monthly_cap_hours: 40, early_leave_minutes: 10, grace_minutes: 10 };
+  if (pol) must("Rules", await admin.from("attendance_policies").update(rules).eq("id", pol.id));
+  else must("Rules", await admin.from("attendance_policies").insert({ business_id: bid, name: "Standard rules", is_default: true, ...rules }));
+
+  // A public holiday last month, if the company's list has none then.
+  const [ty, tm] = todayMv.split("-").map(Number);
+  const prevStart = `${tm === 1 ? ty - 1 : ty}-${String(tm === 1 ? 12 : tm - 1).padStart(2, "0")}-01`;
+  const { count: hols } = await admin
+    .from("public_holidays")
+    .select("id", { count: "exact", head: true })
+    .eq("business_id", bid)
+    .gte("holiday_date", prevStart)
+    .lt("holiday_date", `${todayMv.slice(0, 7)}-01`);
+  if (!hols) must("Holiday", await admin.from("public_holidays").insert({ business_id: bid, name: "Sample public holiday", holiday_date: `${prevStart.slice(0, 8)}15` }));
+  const holidayDays = new Set(
+    rows("Holidays", await admin.from("public_holidays").select("id, holiday_date").eq("business_id", bid).gte("holiday_date", prevStart).lte("holiday_date", todayMv)).map(
+      (h) => (h as unknown as { holiday_date: string }).holiday_date,
+    ),
+  );
+
+  // The roster for the last two weeks and the next week (it overrides the schedule for those days).
   const roster = [];
-  const attendance = [];
   for (let d = -13; d <= 6; d++) {
     const date = day(d);
     for (const [i, p] of people.entries()) {
@@ -316,32 +364,64 @@ async function create(email: string) {
       const rest = (i + d + 100) % 7 === 0;
       const code = shiftFor(p, i);
       roster.push({ business_id: bid, employee_id: emp[p.code], work_date: date, shift_id: rest ? null : shift[code], is_rest_day: rest, published: true, branch_id: p.branch === "male" ? male : island });
-      if (d < 0 && !rest) {
-        const late = rand() < 0.12 ? Math.round(5 + rand() * 20) : 0;
-        const [s, e] = times[code];
-        const inAt = new Date(new Date(at(date, s)).getTime() + (late - 5 + rand() * 4) * 60000).toISOString();
-        const outAt = new Date(new Date(at(date, e)).getTime() + rand() * 20 * 60000).toISOString();
-        const worked = Math.round((new Date(outAt).getTime() - new Date(inAt).getTime()) / 60000) - 60;
-        attendance.push({
-          business_id: bid,
-          employee_id: emp[p.code],
-          work_date: date,
-          shift_id: shift[code],
-          branch_id: p.branch === "male" ? male : island,
-          clock_in_at: inAt,
-          clock_out_at: outAt,
-          break_minutes: 60,
-          worked_minutes: worked,
-          late_minutes: late,
-          overtime_minutes: Math.max(0, worked - 420),
-          status: late ? "late" : "present",
-          source: "portal",
-        });
-      }
     }
   }
   must("Roster", await admin.from("roster_entries").insert(roster));
-  must("Clock-ins", await admin.from("attendance_records").insert(attendance));
+  const rosterBy = new Map(roster.map((r) => [`${r.employee_id}|${r.work_date}`, r]));
+
+  // Clock-ins from the start of last month to yesterday, with the usual mix: most days on time, some late,
+  // a few half days, early leaves and days missed, and overtime on busy days. Days on time off are left empty.
+  const onLeave = new Set<string>();
+  for (const [code, s, e] of [
+    ["E004", day(-20), day(-16)],
+    ["E010", day(-6), day(-5)],
+  ] as const)
+    for (let d = s; d <= e; d = day(1, d)) onLeave.add(`${emp[code]}|${d}`);
+  const attendance = [];
+  for (let date = prevStart; date < todayMv; date = day(1, date)) {
+    const dow = new Date(`${date}T00:00:00Z`).getUTCDay();
+    for (const [i, p] of people.entries()) {
+      if (date < p.joined) continue;
+      const id = emp[p.code];
+      if (onLeave.has(`${id}|${date}`)) continue;
+      const ros = rosterBy.get(`${id}|${date}`);
+      const office = p.branch === "male";
+      const rest = ros ? ros.is_rest_day : office ? dow === 5 || dow === 6 : dow === 5;
+      const code = ros?.shift_id ? (Object.entries(shift).find(([, v]) => v === ros.shift_id)?.[0] ?? shiftFor(p, i)) : office ? "OF" : "AM";
+      const [s, e] = times[code];
+      const holiday = holidayDays.has(date);
+      const r = rand();
+      let inMin = -5 + rand() * 4; // minutes after the shift starts
+      let outMin = rand() * 10; // minutes after the shift ends
+      if (rest || holiday) {
+        // Most people are off; a few work part of a rest day, and island staff cover public holidays.
+        if (rest && r > 0.04) continue;
+        if (holiday && (office || r > 0.5)) continue;
+        if (rest) outMin = -240;
+      } else if (r < 0.035) continue; // absent without approval
+      else if (r < 0.075) outMin = -270; // half day
+      else if (r < 0.105) outMin = -95; // left early
+      else if (r < 0.2) inMin = 12 + rand() * 28; // late
+      if (!rest && !holiday && r >= 0.105 && rand() < 0.18) outMin = 60 + rand() * 120; // stayed on
+      const inAt = new Date(new Date(at(date, s)).getTime() + inMin * 60000).toISOString();
+      const outAt = new Date(new Date(at(date, e)).getTime() + outMin * 60000).toISOString();
+      attendance.push({
+        business_id: bid,
+        employee_id: id,
+        work_date: date,
+        shift_id: shift[code],
+        branch_id: office ? male : island,
+        clock_in_at: inAt,
+        clock_out_at: outAt,
+        source: "portal",
+      });
+    }
+  }
+  // Lateness, hours and overtime are worked out by the database as each day is saved.
+  for (let k = 0; k < attendance.length; k += 400) must("Clock-ins", await admin.from("attendance_records").insert(attendance.slice(k, k + 400)));
+  // A manager approved last month's overtime; this month's is still waiting.
+  const { data: lastOt } = await admin.from("attendance_records").select("id").eq("business_id", bid).gt("overtime_minutes", 0).lt("work_date", `${todayMv.slice(0, 7)}-01`);
+  if (lastOt?.length) must("Overtime approval", await owner.rpc("decide_overtime", { p_business: bid, p_records: lastOt.map((x) => x.id), p_decision: "approved" }));
   // Some people are clocked in right now.
   must(
     "Clocked in today",
@@ -376,12 +456,33 @@ async function create(email: string) {
       ]),
     );
   }
+  // Rules that show what each type can do: notice and team limits on annual leave, birthday leave,
+  // study leave after a year of service, and compassionate leave that HR gives to one person.
+  must(
+    "More time off types",
+    await admin.from("leave_types").upsert(
+      [
+        { business_id: bid, name: "Birthday leave", code: "BL", color: "#f59e0b", entitlement_mode: "birthday", entitlement_days: 1, allow_half_day: false, sort: 20 },
+        { business_id: bid, name: "Study leave", code: "STL", color: "#8b5cf6", entitlement_days: 5, eligible_after_value: 1, eligible_after_unit: "years", allow_during_probation: false, notice_value: 14, sort: 21 },
+        { business_id: bid, name: "Compassionate leave", code: "CL", color: "#64748b", entitlement_mode: "granted", entitlement_days: 0, sort: 22 },
+      ],
+      { onConflict: "business_id,code", ignoreDuplicates: true, defaultToNull: false },
+    ),
+  );
+  await admin.from("leave_types").update({ notice_value: 7, notice_unit: "days", max_off_per_department: 2 }).eq("business_id", bid).eq("code", "AL");
   const types = Object.fromEntries(rows("Leave types", await admin.from("leave_types").select("id, code").eq("business_id", bid)).map((t) => [t.code, t.id])) as Record<string, string>;
   const annual = types.AL ?? Object.values(types)[0];
   const sick = types.SL ?? annual;
+  if (types.CL) {
+    await admin.from("leave_allocations").insert({ business_id: bid, employee_id: emp.E004, leave_type_id: types.CL, days: 3, reason: "Family bereavement", starts_on: day(-2), expires_on: day(60) });
+  }
+  await admin.from("company_events").insert([
+    { business_id: bid, title: "Staff party", kind: "event", start_date: day(15), end_date: day(15), notes: "Dinner at the resort" },
+    { business_id: bid, title: "Year-end stock take", kind: "blackout", start_date: day(40), end_date: day(42) },
+  ]);
   for (const [code, type, start, end, reason] of [
     ["E004", annual, day(-20), day(-16), "Family trip to Addu"],
-    ["E010", sick, day(-6), day(-5), "Fever"],
+    ["E010", sick, day(-6), day(-4), "Fever"],
     ["E007", annual, day(9), day(13), "Sister's wedding"],
     ["E013", annual, day(20), day(34), "Home leave to Bangladesh"],
   ] as const) {
@@ -404,6 +505,34 @@ async function create(email: string) {
     ]),
   );
 
+  // Allowances and deductions worked out from attendance, from the templates.
+  must(
+    "Allowances and deductions",
+    await owner.from("pay_components").insert(
+      ["attendance_allowance", "late_penalty", "transport_allowance"].map((key, i) => {
+        const t = TEMPLATES.find((x) => x.key === key)!;
+        return {
+          business_id: bid,
+          code: key.toUpperCase().slice(0, 16),
+          name: t.name,
+          description: t.description,
+          kind: t.kind,
+          method: t.method,
+          default_amount: t.amount,
+          occurrence_var: t.occurrence_var ?? null,
+          occurrence_after: t.occurrence_after ?? 0,
+          rules_mode: t.rules?.length ? "builder" : "none",
+          rules: t.rules ?? [],
+          is_taxable: t.is_taxable,
+          is_pensionable: t.is_pensionable,
+          applies_to: "all",
+          template_key: key,
+          sort: 10 + i,
+        };
+      }),
+    ),
+  );
+
   // Last month's payroll, calculated, finalized and paid ----------------------
   const [y, m] = todayMv.split("-").map(Number);
   const lastY = m === 1 ? y - 1 : y;
@@ -415,6 +544,7 @@ async function create(email: string) {
   else {
     const steps = [
       ["calculate_payroll_run", "calculate"],
+      ["approve_payroll_run", "approve"],
       ["finalize_payroll_run", "finalize"],
       ["mark_payroll_paid", "mark as paid"],
     ] as const;

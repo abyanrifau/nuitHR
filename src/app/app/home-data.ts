@@ -1,4 +1,5 @@
 import "server-only";
+import { nextPayDay } from "@/lib/format";
 import { createClient } from "@/lib/supabase/server";
 import type { BusinessAccess } from "@/lib/auth/session";
 import { formatMoney } from "@/lib/geo";
@@ -80,16 +81,8 @@ export async function loadWidgetValues(b: BusinessAccess, userId: string, keys: 
     payroll_due: async () => {
       const { data } = await supabase.from("pay_schedules").select("pay_day").eq("business_id", bid).eq("is_default", true).maybeSingle();
       if (!data) return { value: "–", caption: "Set your pay day in Workspace → Tools" };
-      const [y, m, d] = today.split("-").map(Number);
-      const lastDay = (yy: number, mm: number) => new Date(Date.UTC(yy, mm, 0)).getUTCDate();
-      let py = y,
-        pm = m;
-      if (d > Math.min(data.pay_day, lastDay(y, m))) {
-        pm = m === 12 ? 1 : m + 1;
-        py = m === 12 ? y + 1 : y;
-      }
-      const pd = Math.min(data.pay_day, lastDay(py, pm));
-      const days = Math.round((Date.UTC(py, pm - 1, pd) - Date.UTC(y, m - 1, d)) / 86_400_000);
+      const { date, days } = nextPayDay(data.pay_day, today);
+      const [py, pm, pd] = date.split("-").map(Number);
       const label = new Date(Date.UTC(py, pm - 1, pd)).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
       return { value: label, caption: days === 0 ? "Pay day is today" : `In ${plural(days, "day")}`, attention: days <= 5 };
     },

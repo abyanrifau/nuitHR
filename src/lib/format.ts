@@ -80,3 +80,35 @@ export function endOfDayIn(day: string, timeZone = "Indian/Maldives"): string {
   const asLocal = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute, +parts.second);
   return new Date(next.getTime() - (asLocal - next.getTime())).toISOString();
 }
+
+/** How long someone has worked here, in plain words: "4 years, 2 months", "3 months", "12 days". */
+export function lengthOfService(from: string | null | undefined, to: string): string {
+  if (!from || from > to) return "";
+  const [fy, fm, fd] = from.split("-").map(Number);
+  const [ty, tm, td] = to.split("-").map(Number);
+  let months = (ty - fy) * 12 + (tm - fm) - (td < fd ? 1 : 0);
+  if (months < 1) {
+    const days = Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86_400_000);
+    return `${days} ${days === 1 ? "day" : "days"}`;
+  }
+  const years = Math.floor(months / 12);
+  months %= 12;
+  const y = years ? `${years} ${years === 1 ? "year" : "years"}` : "";
+  const m = months ? `${months} ${months === 1 ? "month" : "months"}` : "";
+  return [y, m].filter(Boolean).join(", ");
+}
+
+/** The next pay day on or after `today` (both YYYY-MM-DD), for a monthly pay day (1–31; short months use their last day). */
+export function nextPayDay(payDay: number, today: string): { date: string; days: number } {
+  const [y, m, d] = today.split("-").map(Number);
+  const lastDay = (yy: number, mm: number) => new Date(Date.UTC(yy, mm, 0)).getUTCDate();
+  let py = y,
+    pm = m;
+  if (d > Math.min(payDay, lastDay(y, m))) {
+    pm = m === 12 ? 1 : m + 1;
+    py = m === 12 ? y + 1 : y;
+  }
+  const pd = Math.min(payDay, lastDay(py, pm));
+  const date = `${py}-${String(pm).padStart(2, "0")}-${String(pd).padStart(2, "0")}`;
+  return { date, days: Math.round((Date.UTC(py, pm - 1, pd) - Date.UTC(y, m - 1, d)) / 86_400_000) };
+}

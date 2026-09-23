@@ -1,6 +1,18 @@
 import type { NextConfig } from "next";
 
+// Profile pictures are served from Supabase storage (the public "avatars" bucket).
+const supabaseHost = (() => {
+  try {
+    return new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").hostname;
+  } catch {
+    return "";
+  }
+})();
+
 const nextConfig: NextConfig = {
+  images: {
+    remotePatterns: supabaseHost ? [{ protocol: "https", hostname: supabaseHost, pathname: "/storage/v1/object/public/avatars/**" }] : [],
+  },
   // PDF letters are drawn on the server with this library; load it as-is rather than bundling it.
   serverExternalPackages: ["@react-pdf/renderer"],
   // Lets the local dev server also be opened at 127.0.0.1 (used for testing with a second sign-in).

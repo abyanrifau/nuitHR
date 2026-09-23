@@ -57,6 +57,7 @@ export function RosterGrid({
   leave: { employee_id: string; start: string; end: string }[];
 }) {
   const [cells, setCells] = useState(() => new Map(entries.map((e) => [`${e.employee_id}|${e.work_date}`, e])));
+  const [over, setOver] = useState<string | null>(null);
   const [, start] = useTransition();
   const router = useRouter();
   const shiftBy = new Map(shifts.map((s) => [s.id, s]));
@@ -85,6 +86,35 @@ export function RosterGrid({
     });
   };
 
+  // Drag a shift from the key onto a day, or drag a day onto another to copy it.
+  const DRAG = "text/x-harbor-shift";
+  const dropProps = (employee_id: string, work_date: string) =>
+    canEdit
+      ? {
+          onDragOver: (e: React.DragEvent) => {
+            if (!e.dataTransfer.types.includes(DRAG)) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "copy";
+            setOver(`${employee_id}|${work_date}`);
+          },
+          onDragLeave: () => setOver(null),
+          onDrop: (e: React.DragEvent) => {
+            const v = e.dataTransfer.getData(DRAG);
+            setOver(null);
+            if (!e.dataTransfer.types.includes(DRAG)) return;
+            e.preventDefault();
+            change(employee_id, work_date, v === "clear" ? "" : v);
+          },
+        }
+      : {};
+  const dragFrom = (value: string) => ({
+    draggable: canEdit,
+    onDragStart: (e: React.DragEvent) => {
+      e.dataTransfer.setData(DRAG, value);
+      e.dataTransfer.effectAllowed = "copy";
+    },
+  });
+
   const counts = days.map((d) => people.filter((p) => {
     const c = cells.get(`${p.id}|${d.date}`);
     return c && c.value && c.value !== "rest";
@@ -92,6 +122,23 @@ export function RosterGrid({
 
   return (
     <div>
+      {canEdit && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-[12px]" aria-label="Shifts to drag onto the roster">
+          <span className="text-muted-foreground">Drag onto a day:</span>
+          {shifts.map((x) => (
+            <span key={x.id} {...dragFrom(x.id)} className="cursor-grab rounded-md border border-border-strong px-2 py-1 text-foreground active:cursor-grabbing" style={{ boxShadow: `inset 3px 0 0 ${x.color}` }}>
+              {x.label} {x.time}
+            </span>
+          ))}
+          <span {...dragFrom("rest")} className="cursor-grab rounded-md border border-border-strong px-2 py-1 text-foreground">
+            Rest day
+          </span>
+          <span {...dragFrom("clear")} className="cursor-grab rounded-md border border-dashed border-border px-2 py-1 text-muted-foreground">
+            Clear
+          </span>
+          <span className="text-subtle-foreground">You can also drag a day onto another to copy it, or choose from the list in each day.</span>
+        </div>
+      )}
       <div className="overflow-x-auto rounded-xl border border-border">
         <table className="w-full min-w-[52rem] text-sm">
           <thead>
@@ -116,7 +163,16 @@ export function RosterGrid({
                   const s = c?.value && c.value !== "rest" ? shiftBy.get(c.value) : null;
                   const off = onLeave(p.id, d.date);
                   return (
-                    <td key={d.date} className={cn("border-b border-l border-border px-1 py-1", !d.workday && "bg-surface-muted/40")}>
+                    <td
+                      key={d.date}
+                      {...(off ? {} : dropProps(p.id, d.date))}
+                      {...(!off && c?.value ? dragFrom(c.value) : {})}
+                      className={cn(
+                        "border-b border-l border-border px-1 py-1",
+                        !d.workday && "bg-surface-muted/40",
+                        over === `${p.id}|${d.date}` && "bg-accent-soft outline-2 -outline-offset-2 outline-foreground",
+                      )}
+                    >
                       {off ? (
                         <span className="block rounded-md px-1.5 py-1.5 text-center text-[12px] text-info">Time off</span>
                       ) : canEdit ? (

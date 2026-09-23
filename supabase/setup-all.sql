@@ -8873,3 +8873,4393 @@ alter policy tenant_select on public.support_tickets
 
 call private.finalize_tenant_tables();
 insert into private.schema_migrations (name) values ('20260928000001_speed_indexes_and_rls.sql') on conflict do nothing;
+
+-- ===================== 20260929000001_pictures_and_celebrations.sql =====================
+-- =====================================================================
+-- 0024 PICTURES AND CELEBRATIONS
+--   1. Profile pictures: a storage bucket for small square pictures
+--      (uploaded by the app's server after checking permission; each
+--      file has a random name).
+--   2. Celebrations on Home: birthdays this week (day and month only,
+--      never the year), work anniversaries and new joiners, visible to
+--      everyone in the company. Staff can hide their birthday; admins
+--      can switch the card off.
+--   3. The request inbox also returns the person's picture.
+-- =====================================================================
+
+-- 1. Pictures ----------------------------------------------------------
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('avatars', 'avatars', true, 524288, array['image/webp', 'image/jpeg', 'image/png'])
+on conflict (id) do nothing;
+
+-- 2. Celebrations --------------------------------------------------------
+alter table public.employees add column if not exists hide_birthday boolean not null default false;
+alter table public.businesses add column if not exists celebrations_enabled boolean not null default true;
+
+-- Everyone in the company sees these, so this returns only names, pictures,
+-- the day and month of birthdays (never the year or full date of birth),
+-- the number of years for anniversaries, and join dates of new joiners.
+create or replace function public.celebrations(p_business uuid)
+returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare
+  v_today date;
+  v_on boolean;
+begin
+  if p_business is null or p_business not in (select private.my_business_ids()) then
+    raise exception 'Not allowed' using errcode = '42501';
+  end if;
+  select b.celebrations_enabled, private.biz_today(b.id) into v_on, v_today from public.businesses b where b.id = p_business;
+  if not coalesce(v_on, false) then
+    return jsonb_build_object('enabled', false);
+  end if;
+
+  return jsonb_build_object(
+    'enabled', true,
+    'birthdays', coalesce((
+      select jsonb_agg(x order by x ->> 'on') from (
+        select jsonb_build_object(
+                 'employee_id', e.id,
+                 'name', trim(coalesce(nullif(e.preferred_name, ''), e.first_name) || ' ' || e.last_name),
+                 'photo_path', e.photo_path,
+                 'day', extract(day from e.date_of_birth)::int,
+                 'month', extract(month from e.date_of_birth)::int,
+                 'on', d.day) as x
+          from public.employees e
+          cross join lateral (
+            select g::date as day from generate_series(v_today, v_today + 6, interval '1 day') g
+             where extract(month from g) = extract(month from e.date_of_birth)
+               and (extract(day from g) = extract(day from e.date_of_birth)
+                    -- 29 February birthdays are celebrated on 28 February in other years
+                    or (extract(month from e.date_of_birth) = 2 and extract(day from e.date_of_birth) = 29
+                        and extract(day from g) = 28
+                        and extract(day from (make_date(extract(year from g)::int, 3, 1) - 1)) = 28))
+             limit 1) d
+         where e.business_id = p_business
+           and e.status in ('active', 'probation', 'on_leave')
+           and e.date_of_birth is not null
+           and not e.hide_birthday) t), '[]'::jsonb),
+    'anniversaries', coalesce((
+      select jsonb_agg(x order by x ->> 'on') from (
+        select jsonb_build_object(
+                 'employee_id', e.id,
+                 'name', trim(coalesce(nullif(e.preferred_name, ''), e.first_name) || ' ' || e.last_name),
+                 'photo_path', e.photo_path,
+                 'years', extract(year from d.day)::int - extract(year from e.join_date)::int,
+                 'on', d.day) as x
+          from public.employees e
+          cross join lateral (
+            select g::date as day from generate_series(v_today, v_today + 6, interval '1 day') g
+             where extract(month from g) = extract(month from e.join_date)
+               and extract(day from g) = extract(day from e.join_date)
+             limit 1) d
+         where e.business_id = p_business
+           and e.status in ('active', 'probation', 'on_leave')
+           and e.join_date is not null
+           and extract(year from d.day) > extract(year from e.join_date)) t), '[]'::jsonb),
+    'joiners', coalesce((
+      select jsonb_agg(x order by x ->> 'join_date' desc) from (
+        select jsonb_build_object(
+                 'employee_id', e.id,
+                 'name', trim(coalesce(nullif(e.preferred_name, ''), e.first_name) || ' ' || e.last_name),
+                 'photo_path', e.photo_path,
+                 'join_date', e.join_date,
+                 'position', p.title) as x
+          from public.employees e
+          left join public.positions p on p.business_id = e.business_id and p.id = e.position_id
+         where e.business_id = p_business
+           and e.status in ('active', 'probation', 'on_leave')
+           and e.join_date between v_today - 14 and v_today) t), '[]'::jsonb)
+  );
+end $$;
+revoke all on function public.celebrations(uuid) from public, anon;
+grant execute on function public.celebrations(uuid) to authenticated;
+
+-- Staff choose whether their birthday is shown to colleagues.
+create or replace function public.set_my_birthday_hidden(p_business uuid, p_hidden boolean)
+returns void
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_emp uuid;
+begin
+  select m.employee_id into v_emp from public.business_members m
+   where m.business_id = p_business and m.user_id = auth.uid() and m.status = 'active';
+  if v_emp is null then
+    raise exception 'Your login isn''t linked to a staff profile yet. Ask HR to link it.' using errcode = '42501';
+  end if;
+  update public.employees set hide_birthday = coalesce(p_hidden, false) where id = v_emp and business_id = p_business;
+end $$;
+revoke all on function public.set_my_birthday_hidden(uuid, boolean) from public, anon;
+grant execute on function public.set_my_birthday_hidden(uuid, boolean) to authenticated;
+
+-- Your own picture on your own staff profile. Only a file in your own
+-- folder (stored by the app's server after checking it) can be used.
+create or replace function public.set_my_photo(p_business uuid, p_path text)
+returns void
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_emp uuid;
+begin
+  if p_path is not null and p_path !~ ('^users/' || auth.uid()::text || '/[0-9a-f-]{36}\.(webp|jpg|png)$') then
+    raise exception 'Not allowed' using errcode = '42501';
+  end if;
+  select m.employee_id into v_emp from public.business_members m
+   where m.business_id = p_business and m.user_id = auth.uid() and m.status = 'active';
+  if v_emp is null then return; end if;
+  update public.employees set photo_path = p_path where id = v_emp and business_id = p_business;
+end $$;
+revoke all on function public.set_my_photo(uuid, text) from public, anon;
+grant execute on function public.set_my_photo(uuid, text) to authenticated;
+
+-- 3. Request inbox with the person's picture ---------------------------------
+drop function if exists public.my_request_inbox(uuid);
+create function public.my_request_inbox(p_business uuid)
+returns table (
+  id uuid, request_type text, module_key text, title text, summary text, amount numeric, submitted_at timestamptz,
+  employee_id uuid, employee_name text, requested_by_name text, step_order smallint, total_steps int, via text,
+  employee_photo text)
+language sql stable security definer set search_path = '' as $$
+  select r.id, r.request_type, r.module_key, r.title, r.summary, r.amount, r.submitted_at,
+         r.employee_id, trim(e.first_name || ' ' || e.last_name), p.full_name, s.step_order,
+         (select count(*)::int from public.approval_request_steps x where x.request_id = r.id),
+         case when s.approver_user_id = auth.uid() then 'you'
+              when s.approver_role_id is not null then 'role'
+              when s.approver_user_id is not null and s.approver_user_id <> auth.uid()
+                   and exists (select 1 from public.approval_delegations d where d.delegate_user_id = auth.uid()
+                                and d.delegator_user_id = s.approver_user_id and d.revoked_at is null
+                                and now() between d.starts_at and d.ends_at) then 'stand-in'
+              else 'admin' end,
+         coalesce(e.photo_path, p.avatar_path)
+    from public.approval_requests r
+    join public.approval_request_steps s on s.request_id = r.id and s.status = 'pending'
+    left join public.employees e on e.id = r.employee_id
+    left join public.profiles p on p.id = r.requested_by
+   where r.business_id = p_business and r.status = 'pending'
+     and p_business in (select private.my_business_ids())
+     and (r.requested_by is distinct from auth.uid() or private.is_owner(p_business))
+     and private.is_assigned(r, s)
+   order by r.submitted_at
+$$;
+revoke all on function public.my_request_inbox(uuid) from public, anon;
+grant execute on function public.my_request_inbox(uuid) to authenticated;
+
+call private.finalize_tenant_tables();
+insert into private.schema_migrations (name) values ('20260929000001_pictures_and_celebrations.sql') on conflict do nothing;
+
+-- ===================== 20260929000002_employee_leave_balances.sql =====================
+-- =====================================================================
+-- 0025 One person's time off balances, for their profile in the office
+--   view. Same permission as seeing their time off (all, team or own),
+--   and brings the balances up to date first, like the Balances tab.
+-- =====================================================================
+create or replace function public.employee_leave_balances(p_business uuid, p_employee uuid, p_year int default null)
+returns table (leave_type_id uuid, name text, color text, accrual_method text, balance numeric, taken numeric, pending numeric)
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_year int := coalesce(p_year, extract(year from private.biz_today(p_business))::int);
+  lt record;
+begin
+  if not private.can_emp('leave', 'view', p_business, p_employee) then
+    raise exception 'You don''t have permission to see this person''s time off' using errcode = '42501';
+  end if;
+  if not exists (select 1 from public.employees e where e.id = p_employee and e.business_id = p_business) then
+    return;
+  end if;
+  for lt in select id from public.leave_types where business_id = p_business and is_active loop
+    perform private.ensure_balance(p_business, p_employee, lt.id, v_year);
+  end loop;
+  return query
+    select t.id, t.name, t.color, t.accrual_method, b.balance, b.taken, b.pending
+      from public.leave_types t
+      join public.leave_balances b on b.leave_type_id = t.id and b.employee_id = p_employee and b.period_year = v_year
+     where t.business_id = p_business and t.is_active
+     order by t.sort, t.name;
+end $$;
+revoke all on function public.employee_leave_balances(uuid, uuid, int) from public, anon;
+grant execute on function public.employee_leave_balances(uuid, uuid, int) to authenticated;
+
+call private.finalize_tenant_tables();
+insert into private.schema_migrations (name) values ('20260929000002_employee_leave_balances.sql') on conflict do nothing;
+
+-- ===================== 20260929000003_pictures_by_profile_editors.sql =====================
+-- =====================================================================
+-- 0026 Profile pictures are added by people who can edit staff profiles
+--   (owners, admins, HR), not by staff themselves. Setting your own
+--   picture on your staff profile now needs that permission too.
+-- =====================================================================
+create or replace function public.set_my_photo(p_business uuid, p_path text)
+returns void
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_emp uuid;
+begin
+  if p_business not in (select private.biz_with('employees', 'edit')) then
+    raise exception 'Pictures are added by your HR team' using errcode = '42501';
+  end if;
+  if p_path is not null and p_path !~ ('^users/' || auth.uid()::text || '/[0-9a-f-]{36}\.(webp|jpg|png)$') then
+    raise exception 'Not allowed' using errcode = '42501';
+  end if;
+  select m.employee_id into v_emp from public.business_members m
+   where m.business_id = p_business and m.user_id = auth.uid() and m.status = 'active';
+  if v_emp is null then return; end if;
+  update public.employees set photo_path = p_path where id = v_emp and business_id = p_business;
+end $$;
+revoke all on function public.set_my_photo(uuid, text) from public, anon;
+grant execute on function public.set_my_photo(uuid, text) to authenticated;
+
+call private.finalize_tenant_tables();
+insert into private.schema_migrations (name) values ('20260929000003_pictures_by_profile_editors.sql') on conflict do nothing;
+
+-- ===================== 20260929000004_directory_pictures.sql =====================
+-- =====================================================================
+-- 0027 The staff app's colleague directory also returns each person's
+--   picture. Still no personal details.
+-- =====================================================================
+drop function if exists public.staff_directory(uuid);
+create function public.staff_directory(p_business uuid)
+returns table (id uuid, first_name text, last_name text, preferred_name text, job_title text, department text, location text, work_email text, photo_path text)
+language sql stable security definer set search_path = '' as $$
+  select e.id, e.first_name, e.last_name, e.preferred_name, p.title, d.name, b.name, e.work_email, e.photo_path
+    from public.employees e
+    left join public.positions p on p.id = e.position_id
+    left join public.departments d on d.id = e.department_id
+    left join public.branches b on b.id = e.branch_id
+   where e.business_id = p_business
+     and p_business in (select private.my_business_ids())
+     and e.status in ('active', 'probation', 'on_leave')
+   order by e.first_name, e.last_name
+$$;
+revoke all on function public.staff_directory(uuid) from public, anon;
+grant execute on function public.staff_directory(uuid) to authenticated;
+
+call private.finalize_tenant_tables();
+insert into private.schema_migrations (name) values ('20260929000004_directory_pictures.sql') on conflict do nothing;
+
+-- ===================== 20260930000001_attendance_engine.sql =====================
+-- =====================================================================
+-- 0028 ATTENDANCE ENGINE
+--   Work schedules, one status per person per day, overtime rules and
+--   approval, a stored monthly summary per person (for payroll formulas),
+--   locking once payroll is finalized, importing clock-machine files, and
+--   a history of office edits with the reason given.
+--
+--   Day statuses: present, late, half_day, early_leave, absent (no record
+--   on a working day and no approved time off), on_leave, holiday, rest_day.
+--   Rest days and public holidays are never absences.
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- 1. Work schedules: which weekdays someone works, and their usual shift
+--    (the shift holds the times and break length). A roster entry for a
+--    day overrides the schedule for that day.
+-- ---------------------------------------------------------------------
+create table public.work_schedules (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null references public.businesses (id) on delete cascade,
+  name text not null,
+  working_days smallint[] not null default '{0,1,2,3,4}'
+    check (working_days <@ '{0,1,2,3,4,5,6}'::smallint[] and cardinality(working_days) between 1 and 7),
+  shift_id uuid,
+  is_default boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (business_id, id),
+  unique (business_id, name),
+  foreign key (business_id, shift_id) references public.shifts (business_id, id) on delete set null (shift_id)
+);
+create unique index work_schedules_one_default on public.work_schedules (business_id) where is_default;
+create index work_schedules_shift_fk_idx on public.work_schedules (business_id, shift_id);
+call private.std_rls('work_schedules', 'roster', null, true);
+
+alter table public.employees add column if not exists work_schedule_id uuid;
+alter table public.employees
+  add constraint employees_work_schedule_fk foreign key (business_id, work_schedule_id)
+  references public.work_schedules (business_id, id) on delete set null (work_schedule_id);
+create index if not exists employees_work_schedule_fk_idx on public.employees (business_id, work_schedule_id);
+
+-- ---------------------------------------------------------------------
+-- 2. Rules (all editable in settings)
+-- ---------------------------------------------------------------------
+alter table public.attendance_policies
+  add column if not exists overtime_mode text not null default 'daily_hours' check (overtime_mode in ('daily_hours', 'outside_shift')),
+  add column if not exists overtime_daily_hours numeric(4,2),
+  add column if not exists overtime_rounding text not null default 'down' check (overtime_rounding in ('none', 'nearest', 'down', 'up')),
+  add column if not exists overtime_round_to integer not null default 15 check (overtime_round_to between 1 and 120),
+  add column if not exists overtime_monthly_cap_hours numeric(6,2) check (overtime_monthly_cap_hours is null or overtime_monthly_cap_hours >= 0),
+  add column if not exists overtime_requires_approval boolean not null default false;
+
+-- Built-in rules for a company that hasn't saved its own yet (same values as the settings' defaults).
+create or replace function private.policy_for(p_business uuid, p_employee uuid)
+returns public.attendance_policies
+language plpgsql stable security definer set search_path = '' as $$
+declare
+  p public.attendance_policies;
+begin
+  select ap.* into p from public.employees e join public.attendance_policies ap on ap.id = e.attendance_policy_id
+   where e.id = p_employee and e.business_id = p_business;
+  if p.id is null then
+    select * into p from public.attendance_policies where business_id = p_business and is_default;
+  end if;
+  if p.id is null then
+    p.grace_minutes := 10; p.late_mark_after_minutes := 10; p.early_leave_minutes := 10;
+    p.half_day_min_hours := 4; p.full_day_hours := 8; p.overtime_enabled := true; p.overtime_after_minutes := 30;
+    p.overtime_rate_weekday := 1.25; p.overtime_rate_rest_day := 1.5; p.overtime_rate_holiday := 1.5;
+    p.overtime_mode := 'daily_hours'; p.overtime_rounding := 'down'; p.overtime_round_to := 15;
+    p.overtime_requires_approval := false;
+    p.require_gps := false; p.require_selfie := false; p.allow_breaks := true;
+  end if;
+  return p;
+end $$;
+
+-- ---------------------------------------------------------------------
+-- 3. Day records: early leave as its own status, half days marked by a
+--    manager, the kind of overtime, overtime approval, and edit reasons.
+-- ---------------------------------------------------------------------
+alter table public.attendance_records drop constraint if exists attendance_records_status_check;
+alter table public.attendance_records add constraint attendance_records_status_check
+  check (status in ('present','late','half_day','early_leave','absent','on_leave','holiday','rest_day'));
+alter table public.attendance_records
+  add column if not exists is_half_day boolean not null default false,
+  add column if not exists overtime_type text check (overtime_type in ('normal', 'rest_day', 'holiday')),
+  add column if not exists ot_decision text check (ot_decision in ('approved', 'rejected')),
+  add column if not exists ot_decided_by uuid references auth.users (id) on delete set null,
+  add column if not exists ot_decided_at timestamptz,
+  add column if not exists edit_reason text;
+create index if not exists attendance_records_ot_decided_by_fk_idx on public.attendance_records (ot_decided_by);
+
+-- ---------------------------------------------------------------------
+-- 4. What kind of day it is for someone: a public holiday, a rest day or
+--    a working day, and the shift they're expected on.
+--    Order: public holiday (not optional; whole company or their
+--    location), then the roster for that day, then their work schedule,
+--    then the company's default schedule, then the company's working days.
+-- ---------------------------------------------------------------------
+create or replace function private.day_plan(p_business uuid, p_employee uuid, p_date date)
+returns table (kind text, shift_id uuid)
+language plpgsql stable security definer set search_path = '' as $$
+declare
+  e public.employees;
+  re public.roster_entries;
+  ws public.work_schedules;
+  v_days smallint[];
+begin
+  select * into e from public.employees where id = p_employee and business_id = p_business;
+  select * into re from public.roster_entries where employee_id = p_employee and work_date = p_date;
+  select * into ws from public.work_schedules
+   where business_id = p_business and (id = e.work_schedule_id or (e.work_schedule_id is null and is_default))
+   order by (id = e.work_schedule_id) desc limit 1;
+  shift_id := coalesce(re.shift_id, ws.shift_id);
+  if exists (select 1 from public.public_holidays h
+              where h.business_id = p_business and h.holiday_date = p_date and not h.is_optional
+                and (h.branch_id is null or h.branch_id = e.branch_id)) then
+    kind := 'holiday';
+  elsif re.id is not null then
+    kind := case when re.is_rest_day then 'rest' else 'working' end;
+  else
+    v_days := coalesce(ws.working_days, (select b.working_days from public.businesses b where b.id = p_business));
+    kind := case when extract(dow from p_date)::smallint = any(v_days) then 'working' else 'rest' end;
+  end if;
+  return next;
+end $$;
+
+-- ---------------------------------------------------------------------
+-- 5. Working out one day's numbers from its clock times.
+-- ---------------------------------------------------------------------
+create or replace function private.recalc_attendance(p_record uuid)
+returns void
+language plpgsql security definer set search_path = '' as $$
+declare
+  r public.attendance_records;
+  s public.shifts;
+  p public.attendance_policies;
+  v_kind text;
+  v_plan_shift uuid;
+  v_start timestamptz;
+  v_end timestamptz;
+  v_break int := 0;
+  v_worked int := 0;
+  v_late int := 0;
+  v_early int := 0;
+  v_ot int := 0;
+  v_ot_type text;
+  v_round int;
+  v_status text;
+begin
+  select * into r from public.attendance_records where id = p_record;
+  -- Days entered without clock times (absent, on leave, holiday, rest day) keep what was chosen.
+  if not found or r.clock_in_at is null then return; end if;
+  p := private.policy_for(r.business_id, r.employee_id);
+  select dp.kind, dp.shift_id into v_kind, v_plan_shift from private.day_plan(r.business_id, r.employee_id, r.work_date) dp;
+  select * into s from public.shifts where id = coalesce(r.shift_id, v_plan_shift);
+  if s.id is not null then
+    v_start := private.biz_moment(r.business_id, r.work_date, s.start_time);
+    v_end := private.biz_moment(r.business_id, r.work_date + case when s.crosses_midnight or s.end_time <= s.start_time then 1 else 0 end, s.end_time);
+  end if;
+
+  select coalesce(sum(extract(epoch from (coalesce(b.ended_at, r.clock_out_at, now()) - b.started_at)) / 60), 0)::int
+    into v_break from public.attendance_breaks b where b.record_id = r.id;
+  -- No break recorded: take off the shift's usual break, if the day was long enough to include one
+  -- (longer than the break plus a half day). Short days keep all their time.
+  if v_break = 0 and s.id is not null and s.break_minutes > 0 and r.clock_out_at is not null
+     and extract(epoch from (r.clock_out_at - r.clock_in_at)) / 60 > s.break_minutes + p.half_day_min_hours * 60 then
+    v_break := s.break_minutes;
+  end if;
+
+  -- Late: minutes after the shift started, once past the grace period (working days only).
+  if v_kind = 'working' and v_start is not null and r.clock_in_at > v_start + make_interval(mins => p.grace_minutes) then
+    v_late := (extract(epoch from (r.clock_in_at - v_start)) / 60)::int;
+  end if;
+
+  if r.clock_out_at is not null then
+    v_worked := greatest(0, (extract(epoch from (r.clock_out_at - r.clock_in_at)) / 60)::int - v_break);
+    if v_kind = 'working' then
+      -- Early leave: left more than the allowed minutes before the shift ended.
+      if v_end is not null and r.clock_out_at < v_end - make_interval(mins => p.early_leave_minutes) then
+        v_early := (extract(epoch from (v_end - r.clock_out_at)) / 60)::int;
+      end if;
+      if p.overtime_enabled then
+        if p.overtime_mode = 'outside_shift' and v_start is not null then
+          -- Time worked before the shift started and after it ended.
+          v_ot := least(v_worked,
+            greatest(0, (extract(epoch from (v_start - r.clock_in_at)) / 60)::int)
+            + greatest(0, (extract(epoch from (r.clock_out_at - v_end)) / 60)::int));
+        else
+          -- Time worked beyond the day's hours: the hours set in the rules, else the shift's
+          -- length (less its break), else a full day.
+          v_ot := v_worked - coalesce((p.overtime_daily_hours * 60)::int,
+                                      case when s.id is not null then greatest(0, (extract(epoch from (v_end - v_start)) / 60)::int - s.break_minutes) end,
+                                      (coalesce(p.full_day_hours, 8) * 60)::int);
+        end if;
+        v_ot_type := 'normal';
+      end if;
+    elsif p.overtime_enabled then
+      -- Every hour worked on a rest day or public holiday is overtime at that day's rate.
+      v_ot := v_worked;
+      v_ot_type := case v_kind when 'holiday' then 'holiday' else 'rest_day' end;
+    end if;
+
+    -- Minimum before it counts, then rounding.
+    if v_ot < greatest(p.overtime_after_minutes, 1) then v_ot := 0; end if;
+    v_round := greatest(coalesce(p.overtime_round_to, 1), 1);
+    v_ot := case p.overtime_rounding
+      when 'down' then (v_ot / v_round) * v_round
+      when 'up' then ((v_ot + v_round - 1) / v_round) * v_round
+      when 'nearest' then (round(v_ot::numeric / v_round) * v_round)::int
+      else v_ot end;
+    if v_ot <= 0 then v_ot := 0; v_ot_type := null; end if;
+  end if;
+
+  v_status := case
+    when v_kind = 'holiday' then 'holiday'
+    when v_kind = 'rest' then 'rest_day'
+    when r.is_half_day or (r.clock_out_at is not null and v_worked < p.half_day_min_hours * 60) then 'half_day'
+    when v_early > 0 then 'early_leave'
+    when v_late > 0 then 'late'
+    else 'present' end;
+
+  update public.attendance_records set
+    break_minutes = v_break, worked_minutes = v_worked, late_minutes = v_late, early_leave_minutes = v_early,
+    overtime_minutes = v_ot, overtime_type = v_ot_type, status = v_status,
+    -- A changed amount of overtime needs deciding again.
+    ot_decision = case when v_ot = r.overtime_minutes then r.ot_decision end,
+    ot_decided_by = case when v_ot = r.overtime_minutes then r.ot_decided_by end,
+    ot_decided_at = case when v_ot = r.overtime_minutes then r.ot_decided_at end
+  where id = r.id;
+end $$;
+
+-- Recalculate when times, the shift or the half-day mark change.
+drop trigger if exists attendance_times_changed on public.attendance_records;
+create trigger attendance_times_changed after insert or update of clock_in_at, clock_out_at, shift_id, is_half_day on public.attendance_records
+  for each row execute function private.after_attendance_times_changed();
+
+-- Clocking in uses the roster, else the work schedule, for the day's shift.
+create or replace function private.fill_expected_shift() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if new.shift_id is null then
+    select dp.shift_id into new.shift_id from private.day_plan(new.business_id, new.employee_id, new.work_date) dp;
+  end if;
+  return new;
+end $$;
+drop trigger if exists attendance_expected_shift on public.attendance_records;
+create trigger attendance_expected_shift before insert on public.attendance_records
+  for each row execute function private.fill_expected_shift();
+
+-- ---------------------------------------------------------------------
+-- 6. Locking: once a payroll run covering a day is finalized or paid, that
+--    day's attendance can't change (until the run is reversed).
+-- ---------------------------------------------------------------------
+create or replace function private.attendance_locked(p_business uuid, p_date date)
+returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (select 1 from public.payroll_runs r
+                  where r.business_id = p_business and r.status in ('finalized', 'paid')
+                    and p_date between r.period_start and r.period_end)
+$$;
+
+create or replace function private.guard_attendance_lock() returns trigger
+language plpgsql security definer set search_path = '' as $$
+declare
+  ignore text[] := array['timesheet_id', 'updated_at', 'is_flagged', 'flag_reason'];
+begin
+  -- Linking a day to a timesheet or clearing a "please check" flag isn't a change to attendance.
+  if tg_op = 'UPDATE' and (to_jsonb(new) - ignore) = (to_jsonb(old) - ignore) then
+    return new;
+  end if;
+  if (tg_op in ('UPDATE', 'DELETE') and private.attendance_locked(old.business_id, old.work_date))
+     or (tg_op in ('INSERT', 'UPDATE') and private.attendance_locked(new.business_id, new.work_date)) then
+    raise exception 'Payroll for this period is finalized, so its attendance is locked' using errcode = '42501';
+  end if;
+  return coalesce(new, old);
+end $$;
+drop trigger if exists attendance_lock on public.attendance_records;
+create trigger attendance_lock before insert or update or delete on public.attendance_records
+  for each row execute function private.guard_attendance_lock();
+
+-- ---------------------------------------------------------------------
+-- 7. One row per person per day for a date range: the day's status and
+--    numbers. Days before someone joined or after they left aren't
+--    included; today and later days without a record have no status yet.
+-- ---------------------------------------------------------------------
+create or replace function private.attendance_days(p_business uuid, p_start date, p_end date, p_employee uuid default null)
+returns table (
+  employee_id uuid, day date, kind text, status text, worked_minutes int, late_minutes int, early_leave_minutes int,
+  overtime_minutes int, overtime_type text, overtime_state text, record_id uuid, clock_in_at timestamptz, clock_out_at timestamptz,
+  leave_name text, missing_clock_out boolean, source text)
+language sql stable security definer set search_path = '' as $$
+  with emps as (
+    select e.id, e.branch_id, e.join_date, e.exit_date, e.work_schedule_id
+      from public.employees e
+     where e.business_id = p_business and (p_employee is null or e.id = p_employee)
+       and (e.join_date is null or e.join_date <= p_end)
+       and (e.exit_date is null or e.exit_date >= p_start)
+       and (e.status not in ('resigned', 'terminated') or e.exit_date is not null)
+  ),
+  biz as (select b.working_days, private.biz_today(b.id) as today from public.businesses b where b.id = p_business),
+  def as (select w.working_days, w.shift_id from public.work_schedules w where w.business_id = p_business and w.is_default),
+  days as (
+    select m.*, g::date as day
+      from emps m
+      cross join lateral generate_series(greatest(p_start, coalesce(m.join_date, p_start)), least(p_end, coalesce(m.exit_date, p_end)), interval '1 day') g
+  )
+  select d.id, d.day, k.kind,
+         case
+           when ar.clock_in_at is not null then ar.status
+           when ar.id is not null and ar.status in ('absent', 'on_leave', 'holiday', 'rest_day') then ar.status
+           when k.kind = 'holiday' then 'holiday'
+           when k.kind = 'rest' then 'rest_day'
+           when lv.name is not null then 'on_leave'
+           when d.day >= (select today from biz) then null
+           else 'absent' end,
+         coalesce(ar.worked_minutes, 0), coalesce(ar.late_minutes, 0), coalesce(ar.early_leave_minutes, 0),
+         coalesce(ar.overtime_minutes, 0), ar.overtime_type,
+         case when coalesce(ar.overtime_minutes, 0) = 0 then null
+              when not (private.policy_for(p_business, d.id)).overtime_requires_approval then 'approved'
+              else coalesce(ar.ot_decision, 'pending') end,
+         ar.id, ar.clock_in_at, ar.clock_out_at, lv.name,
+         ar.clock_in_at is not null and ar.clock_out_at is null and d.day < (select today from biz),
+         ar.source
+    from days d
+    left join public.attendance_records ar on ar.employee_id = d.id and ar.work_date = d.day
+    left join public.roster_entries re on re.employee_id = d.id and re.work_date = d.day
+    left join public.work_schedules ws on ws.id = d.work_schedule_id
+    left join lateral (
+      select lt.name from public.leave_requests lr join public.leave_types lt on lt.id = lr.leave_type_id
+       where lr.employee_id = d.id and lr.status = 'approved' and d.day between lr.start_date and lr.end_date
+       limit 1) lv on true
+    cross join lateral (
+      select case
+        when exists (select 1 from public.public_holidays h where h.business_id = p_business and h.holiday_date = d.day
+                      and not h.is_optional and (h.branch_id is null or h.branch_id = d.branch_id)) then 'holiday'
+        when re.id is not null then case when re.is_rest_day then 'rest' else 'working' end
+        when extract(dow from d.day)::smallint = any(coalesce(ws.working_days, (select working_days from def), (select working_days from biz))) then 'working'
+        else 'rest' end as kind) k
+$$;
+
+-- The same, for the office view and the staff app: only people you may see.
+create or replace function public.attendance_days(p_business uuid, p_start date, p_end date, p_employee uuid default null)
+returns table (
+  employee_id uuid, day date, kind text, status text, worked_minutes int, late_minutes int, early_leave_minutes int,
+  overtime_minutes int, overtime_type text, overtime_state text, record_id uuid, clock_in_at timestamptz, clock_out_at timestamptz,
+  leave_name text, missing_clock_out boolean, source text)
+language plpgsql stable security definer set search_path = '' as $$
+begin
+  if p_business not in (select private.my_business_ids()) then
+    raise exception 'Not allowed' using errcode = '42501';
+  end if;
+  if p_end < p_start or p_end - p_start > 62 then
+    raise exception 'Choose up to two months at a time' using errcode = '22023';
+  end if;
+  -- Checked once per person, not once per day.
+  return query
+    with allowed as (
+      select e.id from public.employees e
+       where e.business_id = p_business and (p_employee is null or e.id = p_employee)
+         and private.can_emp('attendance', 'view', p_business, e.id))
+    select d.* from private.attendance_days(p_business, p_start, p_end, p_employee) d
+     where d.employee_id in (select id from allowed)
+     order by d.employee_id, d.day;
+end $$;
+revoke all on function public.attendance_days(uuid, date, date, uuid) from public, anon;
+grant execute on function public.attendance_days(uuid, date, date, uuid) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 8. The monthly summary per person, stored for payroll formulas.
+-- ---------------------------------------------------------------------
+create table public.attendance_months (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null,
+  employee_id uuid not null,
+  month date not null check (extract(day from month) = 1),
+  days_in_month int not null,
+  days_employed int not null,
+  working_days int not null,
+  days_present int not null,            -- present, late or left early (working days)
+  half_days int not null,
+  unapproved_absences int not null,
+  approved_absences int not null,       -- days on approved time off
+  late_count int not null,
+  late_minutes int not null,
+  early_leaves int not null,
+  longest_absence_run int not null,     -- consecutive unapproved absences (rest days and holidays don't break a run)
+  rest_days int not null,
+  holidays int not null,
+  worked_minutes int not null,
+  overtime_normal_minutes int not null,     -- approved (or not needing approval), within the monthly cap
+  overtime_rest_day_minutes int not null,
+  overtime_holiday_minutes int not null,
+  overtime_pending_minutes int not null,    -- waiting for approval
+  overtime_over_cap_minutes int not null,   -- approved but beyond the monthly cap, so not counted
+  computed_at timestamptz not null default now(),
+  locked_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (business_id, id),
+  unique (employee_id, month),
+  foreign key (business_id, employee_id) references public.employees (business_id, id) on delete cascade
+);
+create index attendance_months_month_idx on public.attendance_months (business_id, month);
+call private.std_rls('attendance_months', 'attendance', 'employee_id');
+
+-- Only the database writes summaries.
+create or replace function private.guard_attendance_months() returns trigger
+language plpgsql security invoker set search_path = '' as $$
+begin
+  if private.is_client_context() then
+    raise exception 'Monthly summaries are worked out by Harbor' using errcode = '42501';
+  end if;
+  return coalesce(new, old);
+end $$;
+create trigger attendance_months_guard before insert or update or delete on public.attendance_months
+  for each row execute function private.guard_attendance_months();
+
+-- Works out and stores a month for everyone in the company (locked months are kept as they were).
+create or replace function private.compute_attendance_month(p_business uuid, p_month date, p_employee uuid default null)
+returns int
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_start date := date_trunc('month', p_month)::date;
+  v_end date := (date_trunc('month', p_month) + interval '1 month - 1 day')::date;
+  v_locked boolean := private.attendance_locked(p_business, (date_trunc('month', p_month))::date)
+                      and private.attendance_locked(p_business, (date_trunc('month', p_month) + interval '1 month - 1 day')::date);
+  v_n int;
+begin
+  with d as (select * from private.attendance_days(p_business, v_start, v_end, p_employee)),
+  -- Consecutive unapproved absences, looking only at days that could be absences.
+  runs as (
+    select x.employee_id, max(x.n) as longest from (
+      select employee_id, count(*) as n from (
+        select employee_id, status,
+               row_number() over (partition by employee_id order by day)
+               - row_number() over (partition by employee_id, status = 'absent' order by day) as grp
+          from d where status is not null and status not in ('rest_day', 'holiday')) y
+       where status = 'absent' group by employee_id, grp) x
+     group by x.employee_id),
+  -- Overtime counted in date order until the monthly cap is reached.
+  ot as (
+    select o.employee_id, o.overtime_type,
+           greatest(0, least(o.overtime_minutes, o.cap - (o.running - o.overtime_minutes))) as counted,
+           o.overtime_minutes
+      from (
+        select d.employee_id, d.overtime_type, d.overtime_minutes,
+               coalesce(((private.policy_for(p_business, d.employee_id)).overtime_monthly_cap_hours * 60)::int, 2147483647) as cap,
+               sum(d.overtime_minutes) over (partition by d.employee_id order by d.day) as running
+          from d where d.overtime_state = 'approved') o),
+  ot_sum as (
+    select employee_id,
+           coalesce(sum(counted) filter (where overtime_type = 'normal'), 0) as normal,
+           coalesce(sum(counted) filter (where overtime_type = 'rest_day'), 0) as rest,
+           coalesce(sum(counted) filter (where overtime_type = 'holiday'), 0) as holiday,
+           coalesce(sum(overtime_minutes - counted), 0) as over_cap
+      from ot group by employee_id),
+  agg as (
+    select d.employee_id,
+           count(*) as employed,
+           count(*) filter (where d.kind = 'working') as working,
+           count(*) filter (where d.status in ('present', 'late', 'early_leave') and d.kind = 'working') as present,
+           count(*) filter (where d.status = 'half_day') as half,
+           count(*) filter (where d.status = 'absent') as absent,
+           count(*) filter (where d.status = 'on_leave') as on_leave,
+           count(*) filter (where d.late_minutes > 0) as late_n,
+           coalesce(sum(d.late_minutes), 0) as late_m,
+           count(*) filter (where d.status = 'early_leave') as early_n,          -- a half day isn't also an early leave
+           count(*) filter (where d.kind = 'rest') as rest_n,
+           count(*) filter (where d.kind = 'holiday') as hol_n,
+           coalesce(sum(d.worked_minutes), 0) as worked,
+           coalesce(sum(d.overtime_minutes) filter (where d.overtime_state = 'pending'), 0) as pending
+      from d group by d.employee_id)
+  insert into public.attendance_months as am (business_id, employee_id, month, days_in_month, days_employed, working_days, days_present,
+    half_days, unapproved_absences, approved_absences, late_count, late_minutes, early_leaves, longest_absence_run, rest_days, holidays,
+    worked_minutes, overtime_normal_minutes, overtime_rest_day_minutes, overtime_holiday_minutes, overtime_pending_minutes,
+    overtime_over_cap_minutes, computed_at, locked_at)
+  select p_business, a.employee_id, v_start, (v_end - v_start + 1), a.employed, a.working, a.present, a.half, a.absent, a.on_leave,
+         a.late_n, a.late_m, a.early_n, coalesce(r.longest, 0), a.rest_n, a.hol_n, a.worked,
+         coalesce(o.normal, 0), coalesce(o.rest, 0), coalesce(o.holiday, 0), a.pending, coalesce(o.over_cap, 0),
+         now(), case when v_locked then now() end
+    from agg a left join runs r on r.employee_id = a.employee_id left join ot_sum o on o.employee_id = a.employee_id
+  on conflict (employee_id, month) do update set
+    days_in_month = excluded.days_in_month, days_employed = excluded.days_employed, working_days = excluded.working_days,
+    days_present = excluded.days_present, half_days = excluded.half_days, unapproved_absences = excluded.unapproved_absences,
+    approved_absences = excluded.approved_absences, late_count = excluded.late_count, late_minutes = excluded.late_minutes,
+    early_leaves = excluded.early_leaves, longest_absence_run = excluded.longest_absence_run, rest_days = excluded.rest_days,
+    holidays = excluded.holidays, worked_minutes = excluded.worked_minutes, overtime_normal_minutes = excluded.overtime_normal_minutes,
+    overtime_rest_day_minutes = excluded.overtime_rest_day_minutes, overtime_holiday_minutes = excluded.overtime_holiday_minutes,
+    overtime_pending_minutes = excluded.overtime_pending_minutes, overtime_over_cap_minutes = excluded.overtime_over_cap_minutes,
+    computed_at = now(), locked_at = excluded.locked_at
+    where am.locked_at is null;
+  get diagnostics v_n = row_count;
+  return v_n;
+end $$;
+
+-- Brings a month's summaries up to date (anyone who can see attendance; they then see only the rows they may).
+create or replace function public.refresh_attendance_month(p_business uuid, p_month date)
+returns int
+language plpgsql security definer set search_path = '' as $$
+begin
+  if p_business not in (select private.biz_with('attendance', 'view')) then
+    raise exception 'You don''t have permission to see attendance' using errcode = '42501';
+  end if;
+  return private.compute_attendance_month(p_business, p_month);
+end $$;
+revoke all on function public.refresh_attendance_month(uuid, date) from public, anon;
+grant execute on function public.refresh_attendance_month(uuid, date) to authenticated;
+
+-- Finalizing payroll stores and locks the months it fully covers.
+create or replace function private.lock_attendance_months() returns trigger
+language plpgsql security definer set search_path = '' as $$
+declare
+  m date;
+begin
+  if new.status in ('finalized', 'paid') and old.status not in ('finalized', 'paid') then
+    for m in select generate_series(date_trunc('month', new.period_start), date_trunc('month', new.period_end), interval '1 month')::date loop
+      perform private.compute_attendance_month(new.business_id, m);
+    end loop;
+  elsif new.status = 'reversed' and old.status in ('finalized', 'paid') then
+    update public.attendance_months set locked_at = null
+     where business_id = new.business_id and month between date_trunc('month', new.period_start) and date_trunc('month', new.period_end)
+       and not private.attendance_locked(business_id, month);
+  end if;
+  return new;
+end $$;
+drop trigger if exists payroll_locks_attendance on public.payroll_runs;
+create trigger payroll_locks_attendance after update of status on public.payroll_runs
+  for each row execute function private.lock_attendance_months();
+
+-- ---------------------------------------------------------------------
+-- 9. Overtime approval (when the rules ask for it).
+-- ---------------------------------------------------------------------
+create or replace function public.decide_overtime(p_business uuid, p_records uuid[], p_decision text)
+returns int
+language plpgsql security definer set search_path = '' as $$
+declare
+  r record;
+  v_n int := 0;
+begin
+  if p_decision not in ('approved', 'rejected') then
+    raise exception 'Choose approve or reject' using errcode = '22023';
+  end if;
+  for r in select id, employee_id from public.attendance_records
+            where business_id = p_business and id = any(p_records) and overtime_minutes > 0 loop
+    if not private.can_emp('attendance', 'approve', p_business, r.employee_id) then
+      raise exception 'You can only decide overtime for people you manage' using errcode = '42501';
+    end if;
+    update public.attendance_records set ot_decision = p_decision, ot_decided_by = auth.uid(), ot_decided_at = now()
+     where id = r.id;
+    v_n := v_n + 1;
+  end loop;
+  return v_n;
+end $$;
+revoke all on function public.decide_overtime(uuid, uuid[], text) from public, anon;
+grant execute on function public.decide_overtime(uuid, uuid[], text) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 10. Importing a clock machine's file. Rows arrive already matched to
+--     columns: { row, code, date: YYYY-MM-DD, in: HH:MM, out: HH:MM }.
+--     With p_dry_run, nothing is saved; every problem is listed.
+-- ---------------------------------------------------------------------
+create or replace function public.import_attendance(p_business uuid, p_rows jsonb, p_dry_run boolean default true)
+returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare
+  x jsonb;
+  v_row int;
+  v_emp uuid;
+  v_date date;
+  v_in time;
+  v_out time;
+  v_in_at timestamptz;
+  v_out_at timestamptz;
+  v_today date := private.biz_today(p_business);
+  v_errors jsonb := '[]'::jsonb;
+  v_ok int := 0;
+  v_seen text[] := '{}';
+  v_key text;
+begin
+  if p_business not in (select private.biz_with('attendance', 'edit')) then
+    raise exception 'You don''t have permission to import time records' using errcode = '42501';
+  end if;
+  if jsonb_typeof(p_rows) <> 'array' or jsonb_array_length(p_rows) > 5000 then
+    raise exception 'Import up to 5,000 rows at a time' using errcode = '22023';
+  end if;
+
+  for x in select * from jsonb_array_elements(p_rows) loop
+    v_row := coalesce((x ->> 'row')::int, 0);
+    select e.id into v_emp from public.employees e
+     where e.business_id = p_business and lower(e.employee_code) = lower(trim(x ->> 'code'));
+    if v_emp is null then
+      v_errors := v_errors || jsonb_build_object('row', v_row, 'message', format('No one has the employee number "%s"', x ->> 'code'));
+      continue;
+    end if;
+    if not private.can_emp('attendance', 'edit', p_business, v_emp) then
+      v_errors := v_errors || jsonb_build_object('row', v_row, 'message', 'You can''t change this person''s time records');
+      continue;
+    end if;
+    begin
+      v_date := (x ->> 'date')::date;
+      v_in := nullif(x ->> 'in', '')::time;
+      v_out := nullif(x ->> 'out', '')::time;
+    exception when others then
+      v_errors := v_errors || jsonb_build_object('row', v_row, 'message', 'The date or a time isn''t readable');
+      continue;
+    end;
+    if v_date is null or v_in is null then
+      v_errors := v_errors || jsonb_build_object('row', v_row, 'message', 'A date and a time in are needed');
+      continue;
+    end if;
+    if v_date > v_today then
+      v_errors := v_errors || jsonb_build_object('row', v_row, 'message', 'The date is in the future');
+      continue;
+    end if;
+    if private.attendance_locked(p_business, v_date) then
+      v_errors := v_errors || jsonb_build_object('row', v_row, 'message', 'Payroll for this date is finalized, so it is locked');
+      continue;
+    end if;
+    v_key := v_emp::text || v_date::text;
+    if v_key = any(v_seen) then
+      v_errors := v_errors || jsonb_build_object('row', v_row, 'message', 'This person and day appear twice in the file');
+      continue;
+    end if;
+    v_seen := v_seen || v_key;
+    v_ok := v_ok + 1;
+    continue when p_dry_run;
+
+    v_in_at := private.biz_moment(p_business, v_date, v_in);
+    -- A time out earlier than the time in is the next morning (a night shift).
+    v_out_at := case when v_out is null then null
+                     else private.biz_moment(p_business, v_date + case when v_out < v_in then 1 else 0 end, v_out) end;
+    insert into public.attendance_records (business_id, employee_id, work_date, clock_in_at, clock_out_at, source, status, edit_reason)
+    values (p_business, v_emp, v_date, v_in_at, v_out_at, 'import', 'present', 'Imported from a clock machine file')
+    on conflict (employee_id, work_date) do update set
+      clock_in_at = excluded.clock_in_at, clock_out_at = excluded.clock_out_at, source = 'import',
+      edit_reason = excluded.edit_reason, status = 'present';
+  end loop;
+
+  return jsonb_build_object('valid', v_ok, 'errors', v_errors, 'imported', case when p_dry_run then 0 else v_ok end);
+end $$;
+revoke all on function public.import_attendance(uuid, jsonb, boolean) from public, anon;
+grant execute on function public.import_attendance(uuid, jsonb, boolean) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 11. A history of office edits and imports, with the reason given
+--     (clock-ins and clock-outs from the staff app aren't logged here).
+-- ---------------------------------------------------------------------
+drop trigger if exists audit_attendance_edits on public.attendance_records;
+create trigger audit_attendance_edits after insert or update on public.attendance_records
+  for each row when (pg_trigger_depth() < 1 and new.source in ('manual', 'import'))
+  execute function private.audit_row('attendance', 'employee_id');
+drop trigger if exists audit_attendance_deletes on public.attendance_records;
+create trigger audit_attendance_deletes after delete on public.attendance_records
+  for each row execute function private.audit_row('attendance', 'employee_id');
+
+-- Bring existing days up to date with the new rules (days in finalized payroll periods stay as they were).
+do $$
+declare r record;
+begin
+  for r in select id from public.attendance_records a
+            where a.clock_in_at is not null and not private.attendance_locked(a.business_id, a.work_date) loop
+    perform private.recalc_attendance(r.id);
+  end loop;
+end $$;
+
+call private.finalize_tenant_tables();
+insert into private.schema_migrations (name) values ('20260930000001_attendance_engine.sql') on conflict do nothing;
+
+-- ===================== 20260930000002_payroll_overtime_rules.sql =====================
+-- =====================================================================
+-- 0029 PAYROLL OVERTIME follows the attendance rules: only overtime that
+--   is approved (when approval is required) is paid, at the rate for the
+--   kind of day it was worked on (normal day, rest day, public holiday),
+--   and no more than the monthly cap. Everything else is unchanged.
+-- =====================================================================
+create or replace function public.calculate_payroll_run(p_run uuid)
+returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare
+  r public.payroll_runs;
+  b public.businesses;
+  e public.employees;
+  p public.attendance_policies;
+  pen public.pension_schemes;
+  tax public.tax_tables;
+  comp record;
+  pc record;
+  cl record;
+  ln record;
+  ar record;
+  v_re uuid;
+  v_days int;                -- calendar days in the period
+  v_workdays int;            -- working days in the period
+  v_from date;
+  v_to date;
+  v_employed int;            -- calendar days employed in the period
+  v_unpaid numeric;
+  v_absent numeric;
+  v_paid_days numeric;
+  v_present numeric;
+  v_worked_h numeric;
+  v_ot_h numeric;
+  v_basic numeric;
+  v_salary numeric;
+  v_hourly numeric;
+  v_amount numeric;
+  v_rate numeric;
+  v_gross numeric;
+  v_taxable numeric;
+  v_pensionable numeric;
+  v_ded numeric;
+  v_employer numeric;
+  v_pen_emp numeric;
+  v_tax numeric;
+  v_exc jsonb;
+  v_sort int;
+  v_has_att boolean;
+  v_has_leave boolean;
+  v_has_claims boolean;
+  v_bank record;
+  v_holiday boolean;
+  v_n int := 0;
+  v_ot_cap int;
+  v_ot_used int;
+  v_ot_take int;
+  d date;
+begin
+  select * into r from public.payroll_runs where id = p_run for update;
+  if not found or r.business_id not in (select private.biz_all('payroll', 'edit')) then
+    raise exception 'You don''t have permission to calculate this pay run' using errcode = '42501';
+  end if;
+  if r.status not in ('draft', 'calculated') then
+    raise exception 'This pay run is finalized and locked' using errcode = '42501';
+  end if;
+  select * into b from public.businesses where id = r.business_id;
+  v_has_att := exists (select 1 from public.business_modules where business_id = r.business_id and module_key = 'attendance' and enabled);
+  v_has_leave := exists (select 1 from public.business_modules where business_id = r.business_id and module_key = 'leave' and enabled);
+  v_has_claims := exists (select 1 from public.business_modules where business_id = r.business_id and module_key = 'claims' and enabled);
+  select * into pen from public.pension_schemes where business_id = r.business_id and is_active and effective_from <= r.period_end order by effective_from desc limit 1;
+  select * into tax from public.tax_tables where business_id = r.business_id and is_active and effective_from <= r.period_end order by effective_from desc limit 1;
+
+  -- Start again: forget the previous calculation (people kept on hold stay on hold).
+  create temp table if not exists _held (employee_id uuid) on commit drop;
+  delete from _held where true;
+  insert into _held select employee_id from public.payroll_run_employees where run_id = r.id and status in ('excluded', 'on_hold');
+  create temp table if not exists _manual (employee_id uuid, code text, name text, kind text, amount numeric, is_taxable boolean, is_pensionable boolean) on commit drop;
+  delete from _manual where true;
+  insert into _manual select employee_id, code, name, kind, amount, is_taxable, is_pensionable
+    from public.payroll_run_lines where run_id = r.id and source = 'manual';
+  update public.claims set payroll_run_id = null where payroll_run_id = r.id and status = 'approved';
+  delete from public.payroll_run_employees where run_id = r.id;
+
+  v_days := r.period_end - r.period_start + 1;
+  v_workdays := 0;
+  d := r.period_start;
+  while d <= r.period_end loop
+    if extract(dow from d)::smallint = any(b.working_days) then v_workdays := v_workdays + 1; end if;
+    d := d + 1;
+  end loop;
+
+  for e in select * from public.employees
+            where business_id = r.business_id
+              and (join_date is null or join_date <= r.period_end)
+              and (exit_date is null or exit_date >= r.period_start)
+              and not (status in ('resigned', 'terminated') and exit_date is null)
+            order by first_name, last_name loop
+    v_exc := '[]'::jsonb;
+    v_sort := 0;
+    v_from := greatest(r.period_start, coalesce(e.join_date, r.period_start));
+    v_to := least(r.period_end, coalesce(e.exit_date, r.period_end));
+    v_employed := v_to - v_from + 1;
+
+    select * into comp from public.employee_compensation
+     where employee_id = e.id and effective_date <= r.period_end order by effective_date desc limit 1;
+    select ba.bank_name, ba.account_name, ba.account_number into v_bank
+      from public.employee_bank_accounts ba where ba.employee_id = e.id order by ba.is_primary desc limit 1;
+
+    -- Days not paid: unpaid leave and absences (working days only).
+    v_unpaid := 0;
+    if v_has_leave then
+      select coalesce(sum(private.leave_days(r.business_id, lr.leave_type_id, greatest(lr.start_date, v_from), least(lr.end_date, v_to),
+                 case when lr.start_date >= v_from then lr.start_half else 'full' end,
+                 case when lr.end_date <= v_to then lr.end_half else 'full' end, e.branch_id)), 0)
+        into v_unpaid
+        from public.leave_requests lr join public.leave_types lt on lt.id = lr.leave_type_id
+       where lr.employee_id = e.id and lr.status = 'approved' and not lt.is_paid
+         and lr.start_date <= v_to and lr.end_date >= v_from;
+    end if;
+    v_absent := 0; v_present := 0; v_worked_h := 0; v_ot_h := 0;
+    if v_has_att then
+      select count(*) filter (where status = 'absent'),
+             count(*) filter (where status in ('present','late')) + 0.5 * count(*) filter (where status = 'half_day'),
+             coalesce(sum(worked_minutes), 0) / 60.0,
+             -- Overtime that can be paid: approved when the rules need approval, and within the monthly cap.
+             least(coalesce(sum(overtime_minutes) filter (where ot_decision = 'approved' or not coalesce((private.policy_for(r.business_id, e.id)).overtime_requires_approval, false)), 0),
+                   coalesce(((private.policy_for(r.business_id, e.id)).overtime_monthly_cap_hours * 60)::int, 2147483647)) / 60.0
+        into v_absent, v_present, v_worked_h, v_ot_h
+        from public.attendance_records where employee_id = e.id and work_date between v_from and v_to;
+    end if;
+
+    v_basic := coalesce(comp.basic_salary, 0);
+    if comp.basic_salary is null then
+      v_exc := v_exc || jsonb_build_object('code', 'no_salary', 'message', 'No salary on their profile', 'severity', 'error');
+    end if;
+    if v_bank.account_number is null then
+      v_exc := v_exc || jsonb_build_object('code', 'no_bank', 'message', 'No bank account on their profile', 'severity', 'warning');
+    end if;
+
+    -- Salary for the part of the period they were employed, less unpaid days.
+    if coalesce(comp.pay_basis, 'monthly') = 'monthly' then
+      v_paid_days := greatest(0, v_employed - (v_unpaid + v_absent) * v_days::numeric / greatest(v_workdays, 1));
+      v_salary := round(v_basic * v_paid_days / v_days, 2);
+      v_hourly := v_basic / greatest(v_workdays * coalesce(nullif((select full_day_hours from public.attendance_policies where business_id = r.business_id and is_default), 0), 8), 1);
+    elsif comp.pay_basis = 'daily' then
+      v_paid_days := v_present;
+      v_salary := round(v_basic * v_present, 2);
+      v_hourly := v_basic / 8;
+      if not v_has_att then
+        v_exc := v_exc || jsonb_build_object('code', 'daily_no_time', 'message', 'Paid by the day, but Time & shifts is off', 'severity', 'warning');
+      end if;
+    else
+      v_paid_days := v_present;
+      v_salary := round(v_basic * v_worked_h, 2);
+      v_hourly := v_basic;
+    end if;
+
+    insert into public.payroll_run_employees (business_id, run_id, employee_id, employee_code, employee_name, department_name, position_title,
+      branch_name, bank_name, bank_account_name, bank_account_number, basic_salary, period_days, paid_days, unpaid_leave_days, absent_days,
+      worked_hours, overtime_hours, status)
+    values (r.business_id, r.id, e.id, e.employee_code, trim(e.first_name || ' ' || e.last_name),
+      (select name from public.departments where id = e.department_id), (select title from public.positions where id = e.position_id),
+      (select name from public.branches where id = e.branch_id), v_bank.bank_name, v_bank.account_name, v_bank.account_number,
+      v_basic, v_days, round(v_paid_days, 2), v_unpaid, v_absent, round(v_worked_h, 2), round(v_ot_h, 2),
+      case when e.id in (select employee_id from _held) then 'on_hold' else 'included' end)
+    returning id into v_re;
+    v_n := v_n + 1;
+
+    -- Earnings --------------------------------------------------------
+    insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, quantity, rate, amount, is_taxable, is_pensionable, source, sort)
+    values (r.business_id, r.id, v_re, e.id, 'BASIC', 'Basic salary', 'earning', round(v_paid_days, 2), v_basic, v_salary, true, true, 'salary', 0);
+
+    for pc in select epc.amount, epc.percent, c.id, c.code, c.name, c.kind, c.calc_type, c.default_amount, c.default_percent,
+                     c.is_taxable, c.is_pensionable, c.prorate, c.category, c.sort
+                from public.employee_pay_components epc join public.pay_components c on c.id = epc.component_id
+               where epc.employee_id = e.id and c.is_active and epc.start_date <= v_to and (epc.end_date is null or epc.end_date >= v_from) loop
+      v_amount := case pc.calc_type
+        when 'fixed' then coalesce(pc.amount, pc.default_amount) * case when pc.prorate and coalesce(comp.pay_basis, 'monthly') = 'monthly' then v_paid_days / v_days else 1 end
+        when 'percent_of_basic' then v_basic * coalesce(pc.percent, pc.default_percent, 0) / 100 * case when pc.prorate then v_paid_days / v_days else 1 end
+        when 'per_day_present' then coalesce(pc.amount, pc.default_amount) * v_present
+        when 'per_hour_worked' then coalesce(pc.amount, pc.default_amount) * v_worked_h
+        else coalesce(pc.amount, pc.default_amount) end;
+      v_amount := round(coalesce(v_amount, 0), 2);
+      continue when v_amount = 0;
+      v_sort := v_sort + 1;
+      insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, component_id, code, name, kind, amount, is_taxable, is_pensionable, source, sort)
+      values (r.business_id, r.id, v_re, e.id, pc.id, pc.code, pc.name, pc.kind, v_amount,
+              pc.kind = 'earning' and pc.is_taxable, pc.kind = 'earning' and pc.is_pensionable, 'component', 10 + pc.sort);
+    end loop;
+
+    -- Overtime from time records, at the rate for the kind of day.
+    if v_has_att then
+      p := private.policy_for(r.business_id, e.id);
+      v_ot_cap := coalesce((p.overtime_monthly_cap_hours * 60)::int, 2147483647);
+      v_ot_used := 0;
+      for ar in select work_date, overtime_minutes, overtime_type from public.attendance_records
+                 where employee_id = e.id and work_date between v_from and v_to and overtime_minutes > 0
+                   and (ot_decision = 'approved' or not coalesce(p.overtime_requires_approval, false))
+                 order by work_date loop
+        -- Up to the monthly cap, in date order.
+        v_ot_take := least(ar.overtime_minutes, greatest(0, v_ot_cap - v_ot_used));
+        v_ot_used := v_ot_used + v_ot_take;
+        continue when v_ot_take = 0;
+        v_holiday := exists (select 1 from public.public_holidays h where h.business_id = r.business_id and h.holiday_date = ar.work_date and not h.is_optional);
+        v_rate := case ar.overtime_type
+                    when 'holiday' then coalesce(p.overtime_rate_holiday, 1.5)
+                    when 'rest_day' then coalesce(p.overtime_rate_rest_day, 1.5)
+                    when 'normal' then coalesce(p.overtime_rate_weekday, 1.25)
+                    else case when v_holiday then coalesce(p.overtime_rate_holiday, 1.5)
+                       when not (extract(dow from ar.work_date)::smallint = any(b.working_days)) then coalesce(p.overtime_rate_rest_day, 1.5)
+                       else coalesce(p.overtime_rate_weekday, 1.25) end end;
+        insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, quantity, rate, amount, is_taxable, is_pensionable, source, sort)
+        values (r.business_id, r.id, v_re, e.id, 'OT', 'Overtime ' || to_char(ar.work_date, 'DD Mon') || ' (x' || trim(to_char(v_rate, 'FM0.00')) || ')', 'earning',
+                round(v_ot_take / 60.0, 2), round(v_hourly * v_rate, 4), round(v_ot_take / 60.0 * v_hourly * v_rate, 2), true, false, 'overtime', 50);
+      end loop;
+    end if;
+
+    -- Approved claims paid through payroll, up to this period.
+    if v_has_claims then
+      for cl in select c.id, c.amount, t.name, c.claim_date from public.claims c join public.claim_types t on t.id = c.claim_type_id
+                 where c.employee_id = e.id and c.status = 'approved' and c.payout_method = 'payroll' and c.payroll_run_id is null
+                   and coalesce(c.target_period_start, c.claim_date) <= r.period_end loop
+        insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, amount, is_taxable, is_pensionable, source, source_id, sort)
+        values (r.business_id, r.id, v_re, e.id, 'CLAIM', cl.name || ' claim ' || to_char(cl.claim_date, 'DD Mon'), 'earning', cl.amount, false, false, 'expense_claim', cl.id, 60);
+        update public.claims set payroll_run_id = r.id where id = cl.id;
+      end loop;
+    end if;
+
+    -- Changes typed in by hand on this run are kept when recalculating.
+    insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, amount, is_taxable, is_pensionable, source, sort)
+    select r.business_id, r.id, v_re, e.id, m.code, m.name, m.kind, m.amount, m.is_taxable, m.is_pensionable, 'manual', 70
+      from _manual m where m.employee_id = e.id;
+
+    select coalesce(sum(amount) filter (where kind = 'earning'), 0),
+           coalesce(sum(amount) filter (where kind = 'earning' and is_taxable), 0),
+           coalesce(sum(amount) filter (where kind = 'earning' and is_pensionable), 0)
+      into v_gross, v_taxable, v_pensionable
+      from public.payroll_run_lines where run_employee_id = v_re;
+
+    -- Deductions ------------------------------------------------------
+    for ln in select id, installment_amount, outstanding, kind from public.loans
+               where employee_id = e.id and status = 'active' and start_date <= r.period_end and outstanding > 0 loop
+      insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, amount, source, source_id, sort)
+      values (r.business_id, r.id, v_re, e.id, upper(ln.kind), case when ln.kind = 'advance' then 'Salary advance' else 'Loan repayment' end, 'deduction',
+              least(ln.installment_amount, ln.outstanding), 'loan', ln.id, 80);
+    end loop;
+
+    v_pen_emp := 0; v_employer := 0;
+    if pen.id is not null and (pen.applies_to = 'all' or (pen.applies_to = 'locals') = private.is_local(e, b.country)) then
+      v_amount := case pen.wage_base when 'basic' then v_salary when 'gross' then v_gross else v_pensionable end;
+      if pen.wage_ceiling is not null then v_amount := least(v_amount, pen.wage_ceiling); end if;
+      v_pen_emp := round(v_amount * pen.employee_rate / 100, 2);
+      v_employer := round(v_amount * pen.employer_rate / 100, 2);
+      if v_pen_emp > 0 then
+        insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, rate, amount, source, sort)
+        values (r.business_id, r.id, v_re, e.id, 'PENSION', 'Pension (' || trim(to_char(pen.employee_rate, 'FM990.###')) || '%)', 'deduction', pen.employee_rate, v_pen_emp, 'statutory', 90);
+      end if;
+      if v_employer > 0 then
+        insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, rate, amount, source, sort)
+        values (r.business_id, r.id, v_re, e.id, 'PENSION_ER', 'Employer pension (' || trim(to_char(pen.employer_rate, 'FM990.###')) || '%)', 'employer_contribution', pen.employer_rate, v_employer, 'statutory', 95);
+      end if;
+    end if;
+
+    v_tax := 0;
+    if tax.id is not null and (tax.applies_to = 'all' or (tax.applies_to = 'locals') = private.is_local(e, b.country)) then
+      v_amount := greatest(v_taxable - v_pen_emp, 0);
+      v_tax := case when tax.basis = 'annual' then round(private.tax_for(tax.id, v_amount * 12) / 12, 2) else private.tax_for(tax.id, v_amount) end;
+      if v_tax > 0 then
+        insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, amount, source, sort)
+        values (r.business_id, r.id, v_re, e.id, 'TAX', 'Income tax', 'deduction', v_tax, 'statutory', 91);
+      end if;
+    end if;
+
+    select coalesce(sum(amount), 0) into v_ded from public.payroll_run_lines where run_employee_id = v_re and kind = 'deduction';
+    if v_gross - v_ded < 0 then
+      v_exc := v_exc || jsonb_build_object('code', 'negative', 'message', 'Deductions are more than pay', 'severity', 'error');
+    end if;
+    update public.payroll_run_employees set
+      gross_pay = v_gross, taxable_pay = greatest(v_taxable - v_pen_emp, 0), pensionable_pay = v_pensionable,
+      total_deductions = v_ded, net_pay = v_gross - v_ded, employer_contributions = v_employer, exceptions = v_exc
+    where id = v_re;
+  end loop;
+
+  update public.payroll_runs set
+    status = 'calculated', calculated_at = now(), calculated_by = auth.uid(),
+    employee_count = (select count(*) from public.payroll_run_employees where run_id = r.id and status = 'included'),
+    total_gross = (select coalesce(sum(gross_pay), 0) from public.payroll_run_employees where run_id = r.id and status = 'included'),
+    total_deductions = (select coalesce(sum(total_deductions), 0) from public.payroll_run_employees where run_id = r.id and status = 'included'),
+    total_net = (select coalesce(sum(net_pay), 0) from public.payroll_run_employees where run_id = r.id and status = 'included'),
+    total_employer_contributions = (select coalesce(sum(employer_contributions), 0) from public.payroll_run_employees where run_id = r.id and status = 'included')
+  where id = r.id;
+  -- Claims for people on hold wait for the next run.
+  update public.claims c set payroll_run_id = null
+   where c.payroll_run_id = r.id and c.employee_id in (select employee_id from _held);
+  return jsonb_build_object('people', v_n);
+end $$;
+
+call private.finalize_tenant_tables();
+insert into private.schema_migrations (name) values ('20260930000002_payroll_overtime_rules.sql') on conflict do nothing;
+
+-- ===================== 20260930000003_refresh_one_person.sql =====================
+-- =====================================================================
+-- 0030 Bring one person's month up to date (their profile), without
+--   working out everyone else's.
+-- =====================================================================
+drop function if exists public.refresh_attendance_month(uuid, date);
+create function public.refresh_attendance_month(p_business uuid, p_month date, p_employee uuid default null)
+returns int
+language plpgsql security definer set search_path = '' as $$
+begin
+  if p_employee is null then
+    if p_business not in (select private.biz_with('attendance', 'view')) then
+      raise exception 'You don''t have permission to see attendance' using errcode = '42501';
+    end if;
+  elsif not private.can_emp('attendance', 'view', p_business, p_employee) then
+    raise exception 'You don''t have permission to see this person''s attendance' using errcode = '42501';
+  end if;
+  return private.compute_attendance_month(p_business, p_month, p_employee);
+end $$;
+revoke all on function public.refresh_attendance_month(uuid, date, uuid) from public, anon;
+grant execute on function public.refresh_attendance_month(uuid, date, uuid) to authenticated;
+
+call private.finalize_tenant_tables();
+insert into private.schema_migrations (name) values ('20260930000003_refresh_one_person.sql') on conflict do nothing;
+
+-- ===================== 20260930000004_recalc_after_rule_change.sql =====================
+-- =====================================================================
+-- 0031 After the attendance rules or schedules change, work days out
+--   again from a date on (days in finalized payroll periods stay as
+--   they were).
+-- =====================================================================
+create or replace function public.recalc_attendance_since(p_business uuid, p_from date)
+returns int
+language plpgsql security definer set search_path = '' as $$
+declare
+  r record;
+  v_n int := 0;
+begin
+  if p_business not in (select private.biz_all('attendance', 'edit')) then
+    raise exception 'You don''t have permission to change attendance rules' using errcode = '42501';
+  end if;
+  for r in select a.id from public.attendance_records a
+            where a.business_id = p_business and a.work_date >= p_from and a.clock_in_at is not null
+              and not private.attendance_locked(a.business_id, a.work_date) loop
+    perform private.recalc_attendance(r.id);
+    v_n := v_n + 1;
+  end loop;
+  return v_n;
+end $$;
+revoke all on function public.recalc_attendance_since(uuid, date) from public, anon;
+grant execute on function public.recalc_attendance_since(uuid, date) to authenticated;
+
+call private.finalize_tenant_tables();
+insert into private.schema_migrations (name) values ('20260930000004_recalc_after_rule_change.sql') on conflict do nothing;
+
+-- ===================== 20261001000001_time_off_rules.sql =====================
+-- =====================================================================
+-- 0032 TIME OFF RULES
+--   * No more gradual build-up or carry over: each type gives a fixed
+--     number of days per leave year, all at the start. The leave year is
+--     the calendar year or each person's join anniversary, per type.
+--     Balances that already exist are kept exactly as they are.
+--   * Rules per type: notice (minutes, hours or days) and requests after
+--     the fact; service needed first and probation; who it applies to;
+--     minimum, maximum and consecutive days; half days; how many of a team
+--     can be off at once; blackout dates; paid or unpaid.
+--   * Documents: never, always, or when longer than a number of days, and
+--     optionally later with a deadline. Reminders before the deadline; no
+--     document by then turns the days into unapproved absences.
+--   * Leave granted to particular people (with an expiry), and birthday
+--     leave.
+--   * A company calendar: events and blackout dates.
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- 1. Rules on each type
+-- ---------------------------------------------------------------------
+alter table public.leave_types
+  add column if not exists entitlement_mode text not null default 'annual'
+    check (entitlement_mode in ('annual', 'unlimited', 'granted', 'birthday')),
+  add column if not exists year_basis text not null default 'calendar' check (year_basis in ('calendar', 'anniversary')),
+  add column if not exists notice_value integer not null default 0 check (notice_value >= 0),
+  add column if not exists notice_unit text not null default 'days' check (notice_unit in ('minutes', 'hours', 'days')),
+  add column if not exists allow_after_the_fact boolean not null default false,
+  add column if not exists eligible_after_value integer not null default 0 check (eligible_after_value >= 0),
+  add column if not exists eligible_after_unit text not null default 'months' check (eligible_after_unit in ('days', 'months', 'years')),
+  add column if not exists allow_during_probation boolean not null default true,
+  add column if not exists applies_to text not null default 'all' check (applies_to in ('all', 'selected')),
+  add column if not exists min_days_per_request numeric(6,2) check (min_days_per_request is null or min_days_per_request > 0),
+  add column if not exists max_consecutive_days integer check (max_consecutive_days is null or max_consecutive_days > 0),
+  add column if not exists max_off_per_department integer check (max_off_per_department is null or max_off_per_department > 0),
+  add column if not exists document_rule text not null default 'none' check (document_rule in ('none', 'always', 'over_days')),
+  add column if not exists document_over_days numeric(6,2),
+  add column if not exists document_later_allowed boolean not null default false,
+  add column if not exists document_deadline_days integer not null default 3 check (document_deadline_days between 0 and 60),
+  add column if not exists birthday_window text not null default 'month' check (birthday_window in ('month', 'days_after')),
+  add column if not exists birthday_window_days integer not null default 30 check (birthday_window_days between 1 and 366);
+
+-- Carry the old settings over.
+update public.leave_types set
+  entitlement_mode = case when accrual_method = 'none' then 'unlimited' else 'annual' end,
+  accrual_method = case when accrual_method = 'none' then 'none' else 'upfront' end,
+  carry_forward_max = 0,
+  carry_forward_expiry_months = null,
+  eligible_after_value = min_service_months,
+  eligible_after_unit = 'months',
+  document_rule = case when not requires_document then 'none'
+                       when coalesce(document_required_after_days, 0) > 0 then 'over_days' else 'always' end,
+  document_over_days = case when requires_document and coalesce(document_required_after_days, 0) > 0 then document_required_after_days end;
+-- Sick leave is usually reported after the fact, with the certificate a few days later.
+update public.leave_types set allow_after_the_fact = true, document_later_allowed = true, document_deadline_days = 3
+ where code = 'SL' or name ilike 'sick%';
+
+-- Older setup screens still send the old fields (build-up method, carry
+-- over, "needs a document"). Map them onto the new rules and keep both in step.
+create or replace function private.leave_type_sync() returns trigger
+language plpgsql set search_path = '' as $$
+begin
+  if tg_op = 'INSERT' then
+    if new.accrual_method = 'none' and new.entitlement_mode = 'annual' then new.entitlement_mode := 'unlimited'; end if;
+    if new.requires_document and new.document_rule = 'none' then
+      new.document_rule := case when coalesce(new.document_required_after_days, 0) > 0 then 'over_days' else 'always' end;
+      new.document_over_days := nullif(new.document_required_after_days, 0);
+    end if;
+    if new.min_service_months > 0 and new.eligible_after_value = 0 then
+      new.eligible_after_value := new.min_service_months;
+      new.eligible_after_unit := 'months';
+    end if;
+    -- Sick leave added by the setup questions: reported after the fact, certificate within 3 days.
+    if not private.is_client_context() and new.code = 'SL' then
+      new.allow_after_the_fact := true;
+      new.document_later_allowed := true;
+    end if;
+  else
+    if new.accrual_method is distinct from old.accrual_method and new.entitlement_mode = old.entitlement_mode then
+      new.entitlement_mode := case when new.accrual_method = 'none' then 'unlimited'
+                                   when old.entitlement_mode = 'unlimited' then 'annual' else old.entitlement_mode end;
+    end if;
+    if new.requires_document is distinct from old.requires_document and new.document_rule = old.document_rule then
+      new.document_rule := case when new.requires_document then 'always' else 'none' end;
+    end if;
+  end if;
+  new.accrual_method := case when new.entitlement_mode = 'unlimited' then 'none' else 'upfront' end;
+  new.carry_forward_max := 0;
+  new.carry_forward_expiry_months := null;
+  new.requires_document := new.document_rule <> 'none';
+  new.document_required_after_days := case when new.document_rule = 'over_days' then new.document_over_days end;
+  return new;
+end $$;
+create trigger leave_type_sync before insert or update on public.leave_types
+  for each row execute function private.leave_type_sync();
+
+-- Who a type applies to, when it isn't everyone.
+create table public.leave_type_targets (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null,
+  leave_type_id uuid not null,
+  target_type text not null check (target_type in ('position', 'department', 'branch', 'employee', 'role')),
+  target_id uuid not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (business_id, id),
+  unique (leave_type_id, target_type, target_id),
+  foreign key (business_id, leave_type_id) references public.leave_types (business_id, id) on delete cascade
+);
+create index leave_type_targets_type_idx on public.leave_type_targets (business_id, leave_type_id);
+call private.std_rls('leave_type_targets', 'leave');
+
+-- Days granted to a person, with a reason and an expiry.
+create table public.leave_allocations (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null,
+  employee_id uuid not null,
+  leave_type_id uuid not null,
+  days numeric(6,2) not null check (days > 0),
+  reason text not null check (length(trim(reason)) > 0),
+  starts_on date not null,
+  expires_on date,
+  granted_by uuid default auth.uid() references auth.users (id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (business_id, id),
+  check (expires_on is null or expires_on >= starts_on),
+  foreign key (business_id, employee_id) references public.employees (business_id, id) on delete cascade,
+  foreign key (business_id, leave_type_id) references public.leave_types (business_id, id) on delete cascade
+);
+create index leave_allocations_emp_idx on public.leave_allocations (business_id, employee_id, leave_type_id);
+create index leave_allocations_type_fk_idx on public.leave_allocations (business_id, leave_type_id);
+create index leave_allocations_granted_by_fk_idx on public.leave_allocations (granted_by);
+call private.std_rls('leave_allocations', 'leave', 'employee_id');
+-- People can see days granted to them, but only HR (time off: edit for everyone) can grant them.
+drop policy tenant_insert on public.leave_allocations;
+drop policy tenant_update on public.leave_allocations;
+drop policy tenant_delete on public.leave_allocations;
+create policy tenant_insert on public.leave_allocations for insert to authenticated
+  with check (business_id in (select private.biz_all('leave', 'edit')));
+create policy tenant_update on public.leave_allocations for update to authenticated
+  using (business_id in (select private.biz_all('leave', 'edit'))) with check (business_id in (select private.biz_all('leave', 'edit')));
+create policy tenant_delete on public.leave_allocations for delete to authenticated
+  using (business_id in (select private.biz_all('leave', 'edit')));
+create trigger audit_leave_allocations after insert or update or delete on public.leave_allocations
+  for each row execute function private.audit_row('leave', 'employee_id');
+
+-- The company calendar: events, and blackout dates when time off can't be taken.
+create table public.company_events (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null references public.businesses (id) on delete cascade,
+  title text not null check (length(trim(title)) > 0),
+  kind text not null default 'event' check (kind in ('event', 'blackout')),
+  start_date date not null,
+  end_date date not null,
+  branch_id uuid,                      -- null = every location
+  leave_type_ids uuid[],               -- blackouts: null = every type
+  notes text,
+  created_by uuid default auth.uid() references auth.users (id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (business_id, id),
+  check (end_date >= start_date),
+  foreign key (business_id, branch_id) references public.branches (business_id, id) on delete cascade
+);
+create index company_events_dates_idx on public.company_events (business_id, start_date, end_date);
+create index company_events_branch_fk_idx on public.company_events (business_id, branch_id);
+create index company_events_created_by_fk_idx on public.company_events (created_by);
+call private.std_rls('company_events', 'leave', null, true);
+
+-- Supporting documents on each request.
+alter table public.leave_requests
+  add column if not exists document_status text not null default 'not_needed'
+    check (document_status in ('not_needed', 'needed', 'uploaded', 'overdue', 'waived')),
+  add column if not exists document_due_on date,
+  add column if not exists document_reminded_at timestamptz,
+  add column if not exists absent_since timestamptz,          -- when missing paperwork turned the days into absences
+  add column if not exists document_note text;               -- HR's reason for extending or waiving
+update public.leave_requests set document_status = 'uploaded' where attachment_path is not null;
+create trigger audit_leave_documents after update of document_status, document_due_on on public.leave_requests
+  for each row when (pg_trigger_depth() < 1) execute function private.audit_row('leave', 'employee_id');
+
+-- Balances that exist today stay exactly as they are.
+alter table public.leave_balances add column if not exists kept_as_is boolean not null default false;
+update public.leave_balances set kept_as_is = true;
+
+-- Days the system marks as absent (missing paperwork).
+alter table public.attendance_records drop constraint if exists attendance_records_source_check;
+alter table public.attendance_records add constraint attendance_records_source_check
+  check (source in ('portal', 'manual', 'import', 'correction', 'system'));
+
+-- ---------------------------------------------------------------------
+-- 2. Leave years
+-- ---------------------------------------------------------------------
+-- The leave year a date falls in for a person and type: its first and
+-- last day, and the year it starts in (used to file balances).
+create or replace function private.leave_year(p_type uuid, p_employee uuid, p_date date)
+returns table (year int, starts date, ends date)
+language plpgsql stable security definer set search_path = '' as $$
+declare
+  v_basis text;
+  v_join date;
+  v_this date;
+begin
+  select lt.year_basis, lt.entitlement_mode into v_basis from public.leave_types lt where lt.id = p_type;
+  select e.join_date into v_join from public.employees e where e.id = p_employee;
+  if coalesce(v_basis, 'calendar') = 'calendar' or v_join is null then
+    starts := make_date(extract(year from p_date)::int, 1, 1);
+  else
+    -- 29 February joiners have their anniversary on 28 February in other years.
+    v_this := make_date(extract(year from p_date)::int, extract(month from v_join)::int,
+                        least(extract(day from v_join)::int, extract(day from (make_date(extract(year from p_date)::int, extract(month from v_join)::int, 1) + interval '1 month - 1 day'))::int));
+    starts := case when p_date >= v_this then v_this else (v_this - interval '1 year')::date end;
+  end if;
+  ends := (starts + interval '1 year - 1 day')::date;
+  year := extract(year from starts)::int;
+  return next;
+end $$;
+
+-- A balance row for a leave year: the type's days, all at the start. Rows
+-- that existed before this change keep their numbers.
+create or replace function private.ensure_balance(p_business uuid, p_employee uuid, p_type uuid, p_year int)
+returns uuid
+language plpgsql security definer set search_path = '' as $$
+declare
+  lt public.leave_types;
+  v_id uuid;
+  v_days numeric;
+begin
+  select * into lt from public.leave_types where id = p_type and business_id = p_business;
+  if lt.id is null or not exists (select 1 from public.employees where id = p_employee) then return null; end if;
+  v_days := case when lt.entitlement_mode in ('annual', 'birthday') then lt.entitlement_days else 0 end;
+  insert into public.leave_balances as b (business_id, employee_id, leave_type_id, period_year, entitled, accrued)
+  values (p_business, p_employee, p_type, p_year, v_days, v_days)
+  on conflict (employee_id, leave_type_id, period_year) do update set entitled = excluded.entitled, accrued = excluded.accrued
+    where not b.kept_as_is
+  returning id into v_id;
+  if v_id is null then
+    select id into v_id from public.leave_balances where employee_id = p_employee and leave_type_id = p_type and period_year = p_year;
+  end if;
+  return v_id;
+end $$;
+
+-- The balance row for a leave year, made first if needed. (Called on its
+-- own so it always runs, even before any balance rows exist.)
+create or replace function private.balance_row(p_business uuid, p_employee uuid, p_type uuid, p_year int)
+returns public.leave_balances
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_id uuid := private.ensure_balance(p_business, p_employee, p_type, p_year);
+  b public.leave_balances;
+begin
+  select * into b from public.leave_balances where id = v_id;
+  return b;
+end $$;
+
+-- Requests are filed against the leave year they fall in.
+create or replace function private.leave_request_balance() returns trigger
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_year int;
+  v_bal uuid;
+  v_pending numeric := 0;
+  v_taken numeric := 0;
+begin
+  select ly.year into v_year from private.leave_year(coalesce(new.leave_type_id, old.leave_type_id), coalesce(new.employee_id, old.employee_id),
+                                                    coalesce(new.start_date, old.start_date)) ly;
+  if tg_op in ('UPDATE', 'DELETE') then
+    if old.status = 'pending' then v_pending := v_pending - old.days; end if;
+    if old.status = 'approved' then v_taken := v_taken - old.days; end if;
+  end if;
+  if tg_op in ('INSERT', 'UPDATE') then
+    if new.status = 'pending' then v_pending := v_pending + new.days; end if;
+    if new.status = 'approved' then v_taken := v_taken + new.days; end if;
+  end if;
+  if v_pending <> 0 or v_taken <> 0 then
+    v_bal := private.ensure_balance(coalesce(new.business_id, old.business_id), coalesce(new.employee_id, old.employee_id),
+                                    coalesce(new.leave_type_id, old.leave_type_id), v_year);
+    if v_bal is not null then
+      update public.leave_balances set pending = greatest(0, pending + v_pending), taken = taken + v_taken where id = v_bal;
+    end if;
+  end if;
+  if tg_op = 'UPDATE' and new.status in ('approved', 'rejected') and old.status = 'pending'
+     and not exists (select 1 from public.approval_requests ar where ar.source_table = 'leave_requests' and ar.source_id = new.id) then
+    perform private.notify(new.business_id, private.user_for_employee(new.business_id, new.employee_id), 'leave.decided',
+      case when new.status = 'approved' then 'Time off approved' else 'Time off declined' end,
+      concat_ws(' · ', to_char(new.start_date, 'DD Mon') || case when new.end_date <> new.start_date then ' to ' || to_char(new.end_date, 'DD Mon') else '' end,
+                new.decision_comment), '/staff/time-off', 'leave');
+  end if;
+  return coalesce(new, old);
+end $$;
+
+-- Days granted to someone for a type that are usable on a date.
+create or replace function private.granted_days(p_employee uuid, p_type uuid, p_on date)
+returns numeric
+language sql stable security definer set search_path = '' as $$
+  select coalesce(sum(a.days), 0) from public.leave_allocations a
+   where a.employee_id = p_employee and a.leave_type_id = p_type and a.starts_on <= p_on
+     and (a.expires_on is null or a.expires_on >= p_on)
+$$;
+
+-- ---------------------------------------------------------------------
+-- 3. Who can use a type
+-- ---------------------------------------------------------------------
+-- Why a person can't use a type on a date, or null if they can. Covers
+-- who it's for, gender, contract, service, probation, grants and birthdays.
+create or replace function private.leave_type_block(p_business uuid, p_type uuid, p_employee uuid, p_on date)
+returns text
+language plpgsql stable security definer set search_path = '' as $$
+declare
+  lt public.leave_types;
+  e public.employees;
+  v_role uuid;
+  v_from date;
+begin
+  select * into lt from public.leave_types where id = p_type and business_id = p_business and is_active;
+  if lt.id is null then return 'Choose a type of time off'; end if;
+  select * into e from public.employees where id = p_employee and business_id = p_business;
+  if e.id is null then return 'Choose a person'; end if;
+  select m.role_id into v_role from public.business_members m where m.business_id = p_business and m.employee_id = p_employee and m.status = 'active' limit 1;
+  if lt.applies_to = 'selected' and not exists (
+      select 1 from public.leave_type_targets t where t.leave_type_id = lt.id and (
+        (t.target_type = 'employee' and t.target_id = e.id) or (t.target_type = 'position' and t.target_id = e.position_id)
+        or (t.target_type = 'department' and t.target_id = e.department_id) or (t.target_type = 'branch' and t.target_id = e.branch_id)
+        or (t.target_type = 'role' and t.target_id = v_role))) then
+    return format('%s isn''t available to you', lt.name);
+  end if;
+  if lt.gender_eligibility <> 'any' and e.gender is distinct from lt.gender_eligibility then
+    return format('%s isn''t available to you', lt.name);
+  end if;
+  if lt.eligible_contract_types is not null and not (e.contract_type = any(lt.eligible_contract_types)) then
+    return format('%s isn''t available for your type of contract', lt.name);
+  end if;
+  if not lt.allow_during_probation and (e.status = 'probation' or (e.probation_end_date is not null and e.probation_end_date >= p_on)) then
+    return format('%s can''t be taken during probation', lt.name);
+  end if;
+  if lt.eligible_after_value > 0 then
+    v_from := (coalesce(e.join_date, p_on + 1) + case lt.eligible_after_unit
+                 when 'days' then make_interval(days => lt.eligible_after_value)
+                 when 'years' then make_interval(years => lt.eligible_after_value)
+                 else make_interval(months => lt.eligible_after_value) end)::date;
+    if e.join_date is null or p_on < v_from then
+      return format('%s is available after %s %s of service%s', lt.name, lt.eligible_after_value,
+                    case lt.eligible_after_unit when 'days' then 'days' when 'years' then case when lt.eligible_after_value = 1 then 'year' else 'years' end
+                         else case when lt.eligible_after_value = 1 then 'month' else 'months' end end,
+                    case when e.join_date is not null then ', from ' || to_char(v_from, 'DD Mon YYYY') else '' end);
+    end if;
+  end if;
+  if lt.entitlement_mode = 'granted' and not exists (
+      select 1 from public.leave_allocations a where a.employee_id = e.id and a.leave_type_id = lt.id and (a.expires_on is null or a.expires_on >= p_on)) then
+    return format('%s is only for people HR has given it to', lt.name);
+  end if;
+  if lt.entitlement_mode = 'birthday' and e.date_of_birth is null then
+    return format('%s needs your date of birth on your profile. Ask HR to add it.', lt.name);
+  end if;
+  return null;
+end $$;
+
+-- Is a document needed for a request of this many days?
+create or replace function private.leave_document_needed(p_type uuid, p_days numeric)
+returns boolean
+language sql stable security definer set search_path = '' as $$
+  select coalesce((select lt.document_rule = 'always' or (lt.document_rule = 'over_days' and p_days > coalesce(lt.document_over_days, 0))
+                     from public.leave_types lt where lt.id = p_type), false)
+$$;
+
+-- ---------------------------------------------------------------------
+-- 4. Checking a request against every rule (asking, HR entering, previews)
+-- ---------------------------------------------------------------------
+drop function if exists private.check_leave(uuid, uuid, uuid, date, date, text, text, text, uuid);
+create function private.check_leave(
+  p_business uuid, p_employee uuid, p_type uuid, p_start date, p_end date, p_start_half text, p_end_half text,
+  p_attachment text, p_ignore uuid default null, p_office boolean default false)
+returns numeric
+language plpgsql security definer set search_path = '' as $$
+declare
+  lt public.leave_types;
+  e public.employees;
+  v_block text;
+  v_days numeric;
+  v_bal public.leave_balances;
+  v_available numeric;
+  v_year record;
+  v_begins timestamptz;
+  v_notice interval;
+  v_first date;
+  v_last date;
+  v_moved boolean;
+  v_black record;
+  d date;
+  v_off int;
+  v_bday date;
+  v_win_start date;
+  v_win_end date;
+begin
+  select * into lt from public.leave_types where id = p_type and business_id = p_business and is_active;
+  if not found then
+    raise exception 'Choose a type of time off' using errcode = '22023';
+  end if;
+  select * into e from public.employees where id = p_employee and business_id = p_business;
+  if p_end < p_start then
+    raise exception 'The last day must be on or after the first day' using errcode = '22023';
+  end if;
+  if p_end - p_start > 366 then
+    raise exception 'Ask for up to a year at a time' using errcode = '22023';
+  end if;
+  select * into v_year from private.leave_year(p_type, p_employee, p_start);
+  if p_end > v_year.ends then
+    raise exception 'Your leave year for % starts again on %. Split this into two requests.', lower(lt.name), to_char(v_year.ends + 1, 'DD Mon YYYY')
+      using errcode = '22023';
+  end if;
+
+  v_block := private.leave_type_block(p_business, p_type, p_employee, p_start);
+  if v_block is not null then
+    raise exception '%', v_block using errcode = '22023';
+  end if;
+
+  -- Notice. HR entering time off for someone isn't held to it.
+  if not p_office then
+    v_begins := private.biz_moment(p_business, p_start, case when p_start_half = 'second_half' then '12:00'::time else '00:00'::time end);
+    if v_begins < now() then
+      if not lt.allow_after_the_fact then
+        raise exception '% has to be asked for before it starts', lt.name using errcode = '22023';
+      end if;
+    elsif lt.notice_value > 0 then
+      v_notice := case lt.notice_unit when 'minutes' then make_interval(mins => lt.notice_value)
+                                      when 'hours' then make_interval(hours => lt.notice_value)
+                                      else make_interval(days => lt.notice_value) end;
+      if v_begins - now() < v_notice then
+        raise exception '% needs % % notice. For these dates, you needed to ask by %.', lt.name, lt.notice_value,
+          case lt.notice_unit when 'minutes' then 'minutes''' when 'hours' then case when lt.notice_value = 1 then 'hour''s' else 'hours''' end
+               else case when lt.notice_value = 1 then 'day''s' else 'days''' end end,
+          to_char((v_begins - v_notice) at time zone private.biz_tz(p_business), 'DD Mon YYYY HH24:MI')
+          using errcode = '22023';
+      end if;
+    end if;
+  end if;
+
+  if (p_start_half <> 'full' or p_end_half <> 'full') and not lt.allow_half_day then
+    raise exception '% can''t be taken as half days', lt.name using errcode = '22023';
+  end if;
+  if exists (select 1 from public.leave_requests r where r.employee_id = p_employee and r.status in ('pending','approved')
+              and r.id is distinct from p_ignore and r.start_date <= p_end and r.end_date >= p_start) then
+    raise exception 'You already have time off on some of those days' using errcode = '22023';
+  end if;
+  v_days := private.leave_days(p_business, p_type, p_start, p_end, p_start_half, p_end_half, e.branch_id);
+  if v_days <= 0 then
+    raise exception 'Those dates are all rest days or public holidays, so no time off is needed' using errcode = '22023';
+  end if;
+  if lt.min_days_per_request is not null and v_days < lt.min_days_per_request then
+    raise exception '% has to be at least % days at a time', lt.name, lt.min_days_per_request using errcode = '22023';
+  end if;
+  if lt.max_days_per_request is not null and v_days > lt.max_days_per_request then
+    raise exception '% can be up to % days at a time', lt.name, lt.max_days_per_request using errcode = '22023';
+  end if;
+
+  -- Consecutive days, counting the same type booked right before or after.
+  if lt.max_consecutive_days is not null then
+    v_first := p_start;
+    v_last := p_end;
+    loop
+      v_moved := false;
+      select min(r.start_date) into d from public.leave_requests r
+       where r.employee_id = p_employee and r.leave_type_id = p_type and r.status in ('pending','approved') and r.id is distinct from p_ignore
+         and r.end_date = v_first - 1;
+      if d is not null then v_first := d; v_moved := true; end if;
+      select max(r.end_date) into d from public.leave_requests r
+       where r.employee_id = p_employee and r.leave_type_id = p_type and r.status in ('pending','approved') and r.id is distinct from p_ignore
+         and r.start_date = v_last + 1;
+      if d is not null then v_last := d; v_moved := true; end if;
+      exit when not v_moved;
+    end loop;
+    if v_last - v_first + 1 > lt.max_consecutive_days then
+      raise exception '% can be taken for up to % days in a row', lt.name, lt.max_consecutive_days using errcode = '22023';
+    end if;
+  end if;
+
+  -- Blackout dates.
+  select ce.title, ce.start_date, ce.end_date into v_black from public.company_events ce
+   where ce.business_id = p_business and ce.kind = 'blackout' and ce.start_date <= p_end and ce.end_date >= p_start
+     and (ce.leave_type_ids is null or p_type = any(ce.leave_type_ids)) and (ce.branch_id is null or ce.branch_id = e.branch_id)
+   order by ce.start_date limit 1;
+  if v_black.title is not null then
+    raise exception '% can''t be taken from % to % (%)', lt.name, to_char(v_black.start_date, 'DD Mon'), to_char(v_black.end_date, 'DD Mon'), v_black.title
+      using errcode = '22023';
+  end if;
+
+  -- How many of the team can be off at once.
+  if lt.max_off_per_department is not null and e.department_id is not null then
+    d := p_start;
+    while d <= p_end loop
+      select count(distinct r.employee_id) into v_off from public.leave_requests r join public.employees o on o.id = r.employee_id
+       where r.business_id = p_business and o.department_id = e.department_id and r.employee_id <> p_employee
+         and r.status in ('pending','approved') and r.id is distinct from p_ignore and d between r.start_date and r.end_date;
+      if v_off >= lt.max_off_per_department then
+        raise exception 'Already % from your team % off on %. The most allowed at once is %.', v_off,
+          case when v_off = 1 then 'person is' else 'people are' end, to_char(d, 'DD Mon'), lt.max_off_per_department using errcode = '22023';
+      end if;
+      d := d + 1;
+    end loop;
+  end if;
+
+  -- Birthday leave: only around the birthday.
+  if lt.entitlement_mode = 'birthday' then
+    v_bday := make_date(extract(year from p_start)::int, extract(month from e.date_of_birth)::int,
+                        least(extract(day from e.date_of_birth)::int,
+                              extract(day from (make_date(extract(year from p_start)::int, extract(month from e.date_of_birth)::int, 1) + interval '1 month - 1 day'))::int));
+    if lt.birthday_window = 'month' then
+      v_win_start := date_trunc('month', v_bday)::date;
+      v_win_end := (date_trunc('month', v_bday) + interval '1 month - 1 day')::date;
+    else
+      v_win_start := v_bday;
+      v_win_end := v_bday + lt.birthday_window_days - 1;
+    end if;
+    if p_start < v_win_start or p_end > v_win_end then
+      raise exception '% can be taken between % and %', lt.name, to_char(v_win_start, 'DD Mon'), to_char(v_win_end, 'DD Mon YYYY') using errcode = '22023';
+    end if;
+  end if;
+
+  -- Documents: needed now unless the type lets it follow later.
+  if not p_office and private.leave_document_needed(p_type, v_days) and p_attachment is null and not lt.document_later_allowed then
+    raise exception 'Add a document (for example a medical certificate) for this request' using errcode = '22023';
+  end if;
+
+  -- Enough days left in the leave year (plus days granted by HR).
+  if lt.entitlement_mode <> 'unlimited' then
+    v_bal := private.balance_row(p_business, p_employee, p_type, v_year.year);
+    v_available := v_bal.balance - v_bal.pending + private.granted_days(p_employee, p_type, p_start);
+    if v_days > v_available + (case when lt.allow_negative_balance then lt.max_negative_days else 0 end) then
+      raise exception 'Not enough % left: you have % days and this needs %', lower(lt.name), greatest(v_available, 0), v_days using errcode = '22023';
+    end if;
+  end if;
+  return v_days;
+end $$;
+
+-- ---------------------------------------------------------------------
+-- 5. Asking, entering and previewing
+-- ---------------------------------------------------------------------
+drop function if exists public.request_leave(uuid, uuid, date, date, text, text, text, text);
+create function public.request_leave(
+  p_business uuid, p_type uuid, p_start date, p_end date,
+  p_start_half text default 'full', p_end_half text default 'full', p_reason text default null, p_attachment text default null)
+returns uuid
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_emp uuid := private.my_employee_in(p_business);
+  v_days numeric;
+  v_id uuid;
+  v_type public.leave_types;
+  v_name text;
+  v_doc text := 'not_needed';
+  v_due date;
+begin
+  if v_emp is null then
+    raise exception 'Your login isn''t linked to a staff profile yet. Ask HR to link it.' using errcode = '42501';
+  end if;
+  if not exists (select 1 from public.business_modules where business_id = p_business and module_key = 'leave' and enabled) then
+    raise exception 'Time off isn''t switched on for your company' using errcode = '42501';
+  end if;
+  if p_start < private.biz_today(p_business) - 30 then
+    raise exception 'For time off more than 30 days ago, ask HR to enter it' using errcode = '22023';
+  end if;
+  if p_attachment is not null and p_attachment not like p_business::text || '/leave/' || v_emp::text || '/%' then
+    raise exception 'That document is in the wrong folder' using errcode = '22023';
+  end if;
+  v_days := private.check_leave(p_business, v_emp, p_type, p_start, p_end, p_start_half, p_end_half, p_attachment);
+  select * into v_type from public.leave_types where id = p_type;
+  if private.leave_document_needed(p_type, v_days) then
+    if p_attachment is not null then v_doc := 'uploaded';
+    else v_doc := 'needed'; v_due := p_end + v_type.document_deadline_days; end if;
+  end if;
+  insert into public.leave_requests (business_id, employee_id, leave_type_id, start_date, end_date, start_half, end_half, days, reason,
+                                     attachment_path, status, document_status, document_due_on)
+  values (p_business, v_emp, p_type, p_start, p_end, p_start_half, p_end_half, v_days, nullif(trim(left(p_reason, 500)), ''), p_attachment,
+          'pending', v_doc, v_due)
+  returning id into v_id;
+  select trim(first_name || ' ' || last_name) into v_name from public.employees where id = v_emp;
+  perform private.create_request(p_business, 'leave', 'leave', 'leave_requests', v_id, v_emp,
+    v_type.name || ' for ' || v_name,
+    concat_ws(' · ', to_char(p_start, 'DD Mon') || case when p_end <> p_start then ' to ' || to_char(p_end, 'DD Mon') else '' end,
+              trim(to_char(v_days, 'FM999990.0')) || case when v_days = 1 then ' day' else ' days' end,
+              case when v_doc = 'needed' then 'document due ' || to_char(v_due, 'DD Mon') end, nullif(trim(p_reason), '')),
+    null, jsonb_build_object('start_date', p_start, 'end_date', p_end, 'days', v_days));
+  return v_id;
+end $$;
+revoke all on function public.request_leave(uuid, uuid, date, date, text, text, text, text) from public, anon;
+grant execute on function public.request_leave(uuid, uuid, date, date, text, text, text, text) to authenticated;
+
+drop function if exists public.record_leave(uuid, uuid, uuid, date, date, text, text, text);
+create function public.record_leave(
+  p_business uuid, p_employee uuid, p_type uuid, p_start date, p_end date,
+  p_start_half text default 'full', p_end_half text default 'full', p_reason text default null)
+returns uuid
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_days numeric;
+  v_id uuid;
+  v_type public.leave_types;
+  v_needed boolean;
+begin
+  if not private.can_emp('leave', 'approve', p_business, p_employee) then
+    raise exception 'You don''t have permission to enter time off for this person' using errcode = '42501';
+  end if;
+  v_days := private.check_leave(p_business, p_employee, p_type, p_start, p_end, p_start_half, p_end_half, null, null, true);
+  select * into v_type from public.leave_types where id = p_type;
+  v_needed := private.leave_document_needed(p_type, v_days);
+  insert into public.leave_requests (business_id, employee_id, leave_type_id, start_date, end_date, start_half, end_half, days, reason,
+                                     status, decided_by, decided_at, document_status, document_due_on)
+  values (p_business, p_employee, p_type, p_start, p_end, p_start_half, p_end_half, v_days, nullif(trim(left(p_reason, 500)), ''),
+          'approved', auth.uid(), now(), case when v_needed then 'needed' else 'not_needed' end,
+          case when v_needed then p_end + v_type.document_deadline_days end)
+  returning id into v_id;
+  return v_id;
+end $$;
+revoke all on function public.record_leave(uuid, uuid, uuid, date, date, text, text, text) from public, anon;
+grant execute on function public.record_leave(uuid, uuid, uuid, date, date, text, text, text) to authenticated;
+
+-- What a request would look like before it's sent: days, what's left, the
+-- document needed, or the rule it breaks.
+create or replace function public.preview_my_leave(
+  p_business uuid, p_type uuid, p_start date, p_end date, p_start_half text default 'full', p_end_half text default 'full',
+  p_has_document boolean default false)
+returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_emp uuid := private.my_employee_in(p_business);
+  v_days numeric;
+  v_type public.leave_types;
+begin
+  if v_emp is null then
+    return jsonb_build_object('ok', false, 'error', 'Your login isn''t linked to a staff profile yet. Ask HR to link it.');
+  end if;
+  if p_start < private.biz_today(p_business) - 30 then
+    return jsonb_build_object('ok', false, 'error', 'For time off more than 30 days ago, ask HR to enter it');
+  end if;
+  begin
+    v_days := private.check_leave(p_business, v_emp, p_type, p_start, p_end, p_start_half, p_end_half,
+                                  case when p_has_document then 'preview' end);
+  exception when sqlstate '22023' then
+    return jsonb_build_object('ok', false, 'error', sqlerrm);
+  end;
+  select * into v_type from public.leave_types where id = p_type;
+  return jsonb_build_object(
+    'ok', true, 'days', v_days,
+    'document', case when not private.leave_document_needed(p_type, v_days) then 'none'
+                     when p_has_document then 'attached'
+                     else 'later' end,
+    'document_due', case when private.leave_document_needed(p_type, v_days) and not p_has_document then p_end + v_type.document_deadline_days end);
+end $$;
+revoke all on function public.preview_my_leave(uuid, uuid, date, date, text, text, boolean) from public, anon;
+grant execute on function public.preview_my_leave(uuid, uuid, date, date, text, text, boolean) to authenticated;
+
+-- The types a person can use today, with what's left and the rules that apply.
+create or replace function private.leave_types_for(p_business uuid, p_employee uuid)
+returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_today date := private.biz_today(p_business);
+  lt public.leave_types;
+  v_year record;
+  v_bal public.leave_balances;
+  v_out jsonb := '[]'::jsonb;
+begin
+  for lt in select * from public.leave_types where business_id = p_business and is_active order by sort, name loop
+    continue when private.leave_type_block(p_business, lt.id, p_employee, v_today) is not null;
+    select * into v_year from private.leave_year(lt.id, p_employee, v_today);
+    v_bal := private.balance_row(p_business, p_employee, lt.id, v_year.year);
+    v_out := v_out || jsonb_build_object(
+      'id', lt.id, 'name', lt.name, 'color', lt.color, 'is_paid', lt.is_paid, 'mode', lt.entitlement_mode,
+      'allow_half_day', lt.allow_half_day, 'year_starts', v_year.starts, 'year_ends', v_year.ends,
+      'entitled', case when lt.entitlement_mode = 'unlimited' then null else coalesce(v_bal.entitled, 0) + coalesce(v_bal.adjusted, 0) + coalesce(v_bal.carried_forward, 0) end,
+      'granted', private.granted_days(p_employee, lt.id, v_today),
+      'taken', coalesce(v_bal.taken, 0), 'pending', coalesce(v_bal.pending, 0),
+      'available', case when lt.entitlement_mode = 'unlimited' then null
+                        else greatest(0, coalesce(v_bal.balance, 0) - coalesce(v_bal.pending, 0) + private.granted_days(p_employee, lt.id, v_today)) end,
+      'rules', jsonb_build_object(
+        'notice_value', lt.notice_value, 'notice_unit', lt.notice_unit, 'after_the_fact', lt.allow_after_the_fact,
+        'min_days', lt.min_days_per_request, 'max_days', lt.max_days_per_request, 'max_consecutive', lt.max_consecutive_days,
+        'max_off', lt.max_off_per_department, 'document_rule', lt.document_rule, 'document_over_days', lt.document_over_days,
+        'document_later', lt.document_later_allowed, 'document_deadline_days', lt.document_deadline_days,
+        'birthday_window', case when lt.entitlement_mode = 'birthday' then lt.birthday_window end,
+        'birthday_window_days', lt.birthday_window_days));
+  end loop;
+  return v_out;
+end $$;
+
+create or replace function public.my_leave_types(p_business uuid)
+returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_emp uuid := private.my_employee_in(p_business);
+begin
+  if v_emp is null then return '[]'::jsonb; end if;
+  return private.leave_types_for(p_business, v_emp);
+end $$;
+revoke all on function public.my_leave_types(uuid) from public, anon;
+grant execute on function public.my_leave_types(uuid) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 6. Documents after the fact, and what happens without one
+-- ---------------------------------------------------------------------
+create or replace function private.hr_users(p_business uuid)
+returns setof uuid
+language sql stable security definer set search_path = '' as $$
+  select distinct m.user_id from public.business_members m join public.roles r on r.id = m.role_id
+   where m.business_id = p_business and m.status = 'active'
+     and (r.is_owner or exists (select 1 from public.role_permissions rp where rp.role_id = r.id and rp.resource = 'leave'
+                                   and rp.action = 'approve' and rp.scope = 'all'))
+$$;
+
+-- Everyone to tell about someone's paperwork: HR and their manager.
+create or replace function private.notify_leave_people(r public.leave_requests, p_event text, p_title text, p_body text)
+returns void
+language plpgsql security definer set search_path = '' as $$
+declare
+  u uuid;
+  v_mgr uuid;
+begin
+  select private.user_for_employee(r.business_id, e.manager_id) into v_mgr from public.employees e where e.id = r.employee_id;
+  for u in select * from private.hr_users(r.business_id) union select v_mgr where v_mgr is not null loop
+    continue when u = private.user_for_employee(r.business_id, r.employee_id);
+    perform private.notify(r.business_id, u, p_event, p_title, p_body, '/app/time-off?tab=documents', 'leave');
+  end loop;
+end $$;
+
+-- The employee (or HR) adds the document.
+create or replace function public.attach_leave_document(p_request uuid, p_path text)
+returns void
+language plpgsql security definer set search_path = '' as $$
+declare
+  r public.leave_requests;
+begin
+  select * into r from public.leave_requests where id = p_request;
+  if r.id is null or not (r.employee_id = private.my_employee_in(r.business_id) or private.can_emp('leave', 'edit', r.business_id, r.employee_id)) then
+    raise exception 'You can''t add a document to this time off' using errcode = '42501';
+  end if;
+  if p_path is null or p_path not like r.business_id::text || '/leave/' || r.employee_id::text || '/%' then
+    raise exception 'That document is in the wrong folder' using errcode = '22023';
+  end if;
+  update public.leave_requests set attachment_path = p_path,
+    document_status = case when document_status in ('needed', 'overdue', 'not_needed') then 'uploaded' else document_status end
+   where id = r.id;
+  if r.document_status = 'overdue' then
+    perform private.notify_leave_people(r, 'leave.document_late', 'A late document was added',
+      (select trim(first_name || ' ' || last_name) from public.employees where id = r.employee_id)
+      || ' added their document after the deadline. The days are still absences until HR restores the time off.');
+  end if;
+end $$;
+revoke all on function public.attach_leave_document(uuid, text) from public, anon;
+grant execute on function public.attach_leave_document(uuid, text) to authenticated;
+
+-- Puts time off back after its days were turned into absences.
+create or replace function private.restore_leave_after_absence(r public.leave_requests)
+returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  if r.absent_since is null then return; end if;
+  delete from public.attendance_records a
+   where a.employee_id = r.employee_id and a.work_date between r.start_date and r.end_date and a.source = 'system'
+     and a.status = 'absent' and not private.attendance_locked(a.business_id, a.work_date);
+  update public.leave_requests set status = 'approved', absent_since = null where id = r.id;
+end $$;
+
+-- HR gives more time for the document, or doesn't need it after all. Both need a reason, kept in the history.
+create or replace function public.extend_leave_document(p_request uuid, p_due date, p_reason text)
+returns void
+language plpgsql security definer set search_path = '' as $$
+declare
+  r public.leave_requests;
+begin
+  select * into r from public.leave_requests where id = p_request;
+  if r.id is null or not private.can_emp('leave', 'approve', r.business_id, r.employee_id) then
+    raise exception 'You don''t have permission to change this time off' using errcode = '42501';
+  end if;
+  if coalesce(trim(p_reason), '') = '' then
+    raise exception 'Add a short reason. It''s kept in the history.' using errcode = '22023';
+  end if;
+  if p_due < private.biz_today(r.business_id) then
+    raise exception 'Choose a new deadline from today on' using errcode = '22023';
+  end if;
+  perform private.restore_leave_after_absence(r);
+  update public.leave_requests set document_due_on = p_due, document_status = 'needed', document_reminded_at = null,
+    document_note = trim(p_reason) where id = r.id;
+end $$;
+revoke all on function public.extend_leave_document(uuid, date, text) from public, anon;
+grant execute on function public.extend_leave_document(uuid, date, text) to authenticated;
+
+create or replace function public.waive_leave_document(p_request uuid, p_reason text)
+returns void
+language plpgsql security definer set search_path = '' as $$
+declare
+  r public.leave_requests;
+begin
+  select * into r from public.leave_requests where id = p_request;
+  if r.id is null or not private.can_emp('leave', 'approve', r.business_id, r.employee_id) then
+    raise exception 'You don''t have permission to change this time off' using errcode = '42501';
+  end if;
+  if coalesce(trim(p_reason), '') = '' then
+    raise exception 'Add a short reason. It''s kept in the history.' using errcode = '22023';
+  end if;
+  perform private.restore_leave_after_absence(r);
+  update public.leave_requests set document_status = 'waived', document_note = trim(p_reason) where id = r.id;
+end $$;
+revoke all on function public.waive_leave_document(uuid, text) from public, anon;
+grant execute on function public.waive_leave_document(uuid, text) to authenticated;
+
+-- Daily: reminders the day before a document is due, and missing documents
+-- turn the time off into unapproved absences (which payroll deducts).
+create or replace function private.process_leave_documents(p_business uuid default null)
+returns int
+language plpgsql security definer set search_path = '' as $$
+declare
+  r public.leave_requests;
+  v_today date;
+  v_type text;
+  v_name text;
+  v_user uuid;
+  d date;
+  v_n int := 0;
+begin
+  for r in select lr.* from public.leave_requests lr
+            where (p_business is null or lr.business_id = p_business) and lr.document_status = 'needed'
+              and lr.status in ('pending', 'approved') and lr.document_due_on is not null loop
+    v_today := private.biz_today(r.business_id);
+    select lt.name into v_type from public.leave_types lt where lt.id = r.leave_type_id;
+    select trim(e.first_name || ' ' || e.last_name) into v_name from public.employees e where e.id = r.employee_id;
+    v_user := private.user_for_employee(r.business_id, r.employee_id);
+
+    if r.document_due_on < v_today then
+      -- The deadline has passed: the days become unapproved absences.
+      update public.leave_requests set document_status = 'overdue', status = 'cancelled', absent_since = now(),
+        decision_comment = 'No document by ' || to_char(r.document_due_on, 'DD Mon') || ', so these days are unapproved absences'
+       where id = r.id;
+      update public.approval_requests set status = 'cancelled', decided_at = now()
+       where source_table = 'leave_requests' and source_id = r.id and status = 'pending';
+      update public.approval_request_steps s set status = 'skipped'
+        from public.approval_requests ar where ar.id = s.request_id and ar.source_table = 'leave_requests' and ar.source_id = r.id
+         and s.status in ('pending', 'waiting');
+      d := r.start_date;
+      while d <= r.end_date loop
+        if (select dp.kind from private.day_plan(r.business_id, r.employee_id, d) dp) = 'working'
+           and not private.attendance_locked(r.business_id, d) then
+          insert into public.attendance_records (business_id, employee_id, work_date, status, source, edit_reason)
+          values (r.business_id, r.employee_id, d, 'absent', 'system', 'No document for ' || v_type || ' by ' || to_char(r.document_due_on, 'DD Mon'))
+          on conflict (employee_id, work_date) do nothing;
+        end if;
+        d := d + 1;
+      end loop;
+      perform private.notify(r.business_id, v_user, 'leave.document_overdue', 'Your time off is now an absence',
+        'No document was added for ' || v_type || ' (' || to_char(r.start_date, 'DD Mon') || ') by ' || to_char(r.document_due_on, 'DD Mon')
+        || '. Those days now count as unapproved absences. Talk to HR if this is wrong.', '/staff/time-off', 'leave');
+      perform private.notify_leave_people(r, 'leave.document_overdue', v_name || '''s time off is now an absence',
+        'No document for ' || v_type || ' (' || to_char(r.start_date, 'DD Mon') || ') by ' || to_char(r.document_due_on, 'DD Mon')
+        || '. You can give more time or waive the document in Time off.');
+      v_n := v_n + 1;
+    elsif r.document_due_on <= v_today + 1 and r.document_reminded_at is null then
+      perform private.notify(r.business_id, v_user, 'leave.document_due', 'Add your document for ' || v_type,
+        'Please add it by ' || to_char(r.document_due_on, 'DD Mon') || '. Without it, those days become unapproved absences.',
+        '/staff/time-off', 'leave');
+      perform private.notify_leave_people(r, 'leave.document_due', v_name || '''s document is due ' || to_char(r.document_due_on, 'DD Mon'),
+        'For ' || v_type || ' from ' || to_char(r.start_date, 'DD Mon') || '. It hasn''t been added yet.');
+      update public.leave_requests set document_reminded_at = now() where id = r.id;
+      v_n := v_n + 1;
+    end if;
+  end loop;
+  return v_n;
+end $$;
+
+-- Run by the daily job with the server key.
+create or replace function public.run_leave_document_checks()
+returns int
+language plpgsql security definer set search_path = '' as $$
+begin
+  if not private.is_service_request() then
+    raise exception 'Not allowed' using errcode = '42501';
+  end if;
+  return private.process_leave_documents();
+end $$;
+revoke all on function public.run_leave_document_checks() from public, anon, authenticated;
+grant execute on function public.run_leave_document_checks() to service_role;
+
+-- ---------------------------------------------------------------------
+-- 7. Years, balances for the office, and carry over removed
+-- ---------------------------------------------------------------------
+create or replace function public.start_leave_year(p_business uuid, p_year int)
+returns int
+language plpgsql security definer set search_path = '' as $$
+declare
+  e record;
+  lt record;
+  v_n int := 0;
+begin
+  if p_business not in (select private.biz_all('leave', 'edit')) then
+    raise exception 'You don''t have permission to start a new year' using errcode = '42501';
+  end if;
+  for e in select id from public.employees where business_id = p_business and status in ('active','probation','on_leave','suspended') loop
+    for lt in select id from public.leave_types where business_id = p_business and is_active loop
+      perform private.ensure_balance(p_business, e.id, lt.id, p_year);
+      v_n := v_n + 1;
+    end loop;
+  end loop;
+  return v_n;
+end $$;
+
+-- One person's balances in their current leave year for each type (profile, office).
+drop function if exists public.employee_leave_balances(uuid, uuid, int);
+create function public.employee_leave_balances(p_business uuid, p_employee uuid, p_year int default null)
+returns table (leave_type_id uuid, name text, color text, accrual_method text, balance numeric, taken numeric, pending numeric)
+language plpgsql security definer set search_path = '' as $$
+declare
+  lt public.leave_types;
+  v_year int;
+  v_today date := private.biz_today(p_business);
+  b public.leave_balances;
+begin
+  if not private.can_emp('leave', 'view', p_business, p_employee) then
+    raise exception 'You don''t have permission to see this person''s time off' using errcode = '42501';
+  end if;
+  if not exists (select 1 from public.employees e where e.id = p_employee and e.business_id = p_business) then return; end if;
+  for lt in select * from public.leave_types where business_id = p_business and is_active order by sort, name loop
+    continue when lt.entitlement_mode in ('granted', 'birthday') and private.leave_type_block(p_business, lt.id, p_employee, v_today) is not null;
+    v_year := coalesce(p_year, (select ly.year from private.leave_year(lt.id, p_employee, v_today) ly));
+    b := private.balance_row(p_business, p_employee, lt.id, v_year);
+    leave_type_id := lt.id; name := lt.name; color := lt.color;
+    accrual_method := case when lt.entitlement_mode = 'unlimited' then 'none' else 'upfront' end;
+    balance := coalesce(b.balance, 0) + private.granted_days(p_employee, lt.id, v_today);
+    taken := coalesce(b.taken, 0); pending := coalesce(b.pending, 0);
+    return next;
+  end loop;
+end $$;
+revoke all on function public.employee_leave_balances(uuid, uuid, int) from public, anon;
+grant execute on function public.employee_leave_balances(uuid, uuid, int) to authenticated;
+
+-- Staff's own balances keep working, and only list types they can use.
+create or replace function public.my_leave_balances(p_business uuid, p_year int default null)
+returns table (leave_type_id uuid, name text, color text, is_paid boolean, accrual_method text, entitled numeric, accrued numeric,
+               carried_forward numeric, adjusted numeric, taken numeric, pending numeric, balance numeric, allow_half_day boolean,
+               requires_document boolean)
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_emp uuid := private.my_employee_in(p_business);
+  v_today date := private.biz_today(p_business);
+  lt public.leave_types;
+  b public.leave_balances;
+  v_year int;
+begin
+  if v_emp is null then return; end if;
+  for lt in select * from public.leave_types where business_id = p_business and is_active order by sort, name loop
+    continue when private.leave_type_block(p_business, lt.id, v_emp, v_today) is not null;
+    v_year := coalesce(p_year, (select ly.year from private.leave_year(lt.id, v_emp, v_today) ly));
+    b := private.balance_row(p_business, v_emp, lt.id, v_year);
+    leave_type_id := lt.id; name := lt.name; color := lt.color; is_paid := lt.is_paid;
+    accrual_method := case when lt.entitlement_mode = 'unlimited' then 'none' else 'upfront' end;
+    entitled := b.entitled; accrued := b.accrued; carried_forward := b.carried_forward; adjusted := b.adjusted;
+    taken := b.taken; pending := b.pending;
+    balance := coalesce(b.balance, 0) + private.granted_days(v_emp, lt.id, v_today);
+    allow_half_day := lt.allow_half_day; requires_document := lt.document_rule <> 'none';
+    return next;
+  end loop;
+end $$;
+revoke all on function public.my_leave_balances(uuid, int) from public, anon;
+grant execute on function public.my_leave_balances(uuid, int) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 8. Attendance: leave only counts while it's approved (cancelled time
+--    off, including time off whose document never came, is an absence).
+--    Already true in private.attendance_days; system absences are
+--    written as records so payroll sees them too.
+-- ---------------------------------------------------------------------
+
+call private.finalize_tenant_tables();
+insert into private.schema_migrations (name) values ('20261001000001_time_off_rules.sql') on conflict do nothing;
+
+-- ===================== 20261002000001_pay_items.sql =====================
+-- =====================================================================
+-- 0033 PAY ITEMS: allowances and deductions that work themselves out.
+--   * Each item has a calculation method (fixed, per day attended,
+--     prorated by attendance, % of basic, per occurrence, or a formula),
+--     dates it applies between, and who gets it (everyone, or chosen
+--     departments, jobs, locations or people, with their own amounts).
+--   * Rules, checked top to bottom (first match wins), or a rule formula.
+--   * Formulas are stored as a checked tree and calculated here by
+--     private.pay_eval: numbers, the pay variables, + - * /, comparisons,
+--     IF, AND, OR, MIN, MAX and ROUND. Nothing is ever run as code.
+--   * Payroll and the test panel use the same calculation, and every
+--     payroll line keeps a plain explanation of how it was worked out.
+--   * Basic salary now only takes off unpaid leave. Unapproved absences
+--     are taken off by an "Unapproved absence deduction" item each
+--     company gets, which can be changed or switched off.
+--   * Salaries: change a group at once, or import from a file.
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- 1. Pay item settings
+-- ---------------------------------------------------------------------
+alter table public.pay_components
+  add column if not exists description text,
+  add column if not exists method text not null default 'fixed'
+    check (method in ('fixed', 'per_day', 'prorated', 'percent', 'per_occurrence', 'formula')),
+  add column if not exists prorate_basis text not null default 'working' check (prorate_basis in ('calendar', 'working')),
+  add column if not exists occurrence_var text,
+  add column if not exists occurrence_after integer not null default 0 check (occurrence_after >= 0),
+  add column if not exists formula text,
+  add column if not exists formula_ast jsonb,
+  add column if not exists rules_mode text not null default 'none' check (rules_mode in ('none', 'builder', 'formula')),
+  add column if not exists rules jsonb not null default '[]'::jsonb,
+  add column if not exists rules_formula text,
+  add column if not exists rules_ast jsonb,
+  add column if not exists applies_to text not null default 'all' check (applies_to in ('all', 'selected')),
+  add column if not exists effective_from date,
+  add column if not exists effective_to date,
+  add column if not exists template_key text,
+  add column if not exists updated_by uuid default auth.uid() references auth.users (id) on delete set null;
+alter table public.pay_components drop constraint if exists pay_components_effective_check;
+alter table public.pay_components add constraint pay_components_effective_check
+  check (effective_to is null or effective_from is null or effective_to >= effective_from);
+create index if not exists pay_components_updated_by_fk_idx on public.pay_components (updated_by);
+
+-- Existing items keep what they did. Items given to people one by one stay that way.
+update public.pay_components set
+  method = case calc_type when 'percent_of_basic' then 'percent' when 'per_day_present' then 'per_day' else 'fixed' end,
+  applies_to = 'selected';
+
+-- Who an item is for, when it isn't everyone. People with their own amount always get it.
+create table public.pay_component_targets (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null,
+  component_id uuid not null,
+  target_type text not null check (target_type in ('department', 'position', 'branch', 'employee')),
+  target_id uuid not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (business_id, id),
+  unique (component_id, target_type, target_id),
+  foreign key (business_id, component_id) references public.pay_components (business_id, id) on delete cascade
+);
+create index pay_component_targets_component_idx on public.pay_component_targets (business_id, component_id);
+call private.std_rls('pay_component_targets', 'payroll');
+
+-- How each payroll line was worked out, in plain words.
+alter table public.payroll_run_lines add column if not exists explanation text;
+
+-- Every change to an item and who gets it is kept with who, when, before and after.
+create trigger audit_pay_components after insert or update or delete on public.pay_components
+  for each row execute function private.audit_row('payroll', '');
+create trigger audit_pay_component_targets after insert or update or delete on public.pay_component_targets
+  for each row execute function private.audit_row('payroll', '');
+
+-- ---------------------------------------------------------------------
+-- 2. The formula calculator
+-- ---------------------------------------------------------------------
+create or replace function private.pay_variable_names()
+returns text[]
+language sql immutable as $$
+  select array['basic_salary', 'amount', 'days_in_month', 'working_days', 'days_present', 'unapproved_absences',
+               'approved_absences', 'half_days', 'late_count', 'early_leaves', 'consecutive_unapproved_absences',
+               'overtime_hours', 'unpaid_leave_days', 'years_of_service']
+$$;
+
+-- Calculates a formula tree. Comparisons and AND/OR give 1 (true) or 0 (false).
+-- Dividing by zero gives 0, so one empty month can't stop a pay run.
+create or replace function private.pay_eval(n jsonb, v jsonb, d int default 0)
+returns numeric
+language plpgsql immutable set search_path = '' as $$
+declare
+  op text;
+  a numeric;
+  b numeric;
+  r numeric;
+  i int;
+  len int;
+begin
+  if d > 60 then
+    raise exception 'The formula is nested too deeply' using errcode = '22023';
+  end if;
+  if n is null or jsonb_typeof(n) is distinct from 'array' or jsonb_array_length(n) < 2 then
+    raise exception 'The formula isn''t valid' using errcode = '22023';
+  end if;
+  op := n ->> 0;
+  len := jsonb_array_length(n);
+  case op
+    when 'num' then
+      if jsonb_typeof(n -> 1) <> 'number' then raise exception 'The formula isn''t valid' using errcode = '22023'; end if;
+      return (n ->> 1)::numeric;
+    when 'var' then
+      if not ((n ->> 1) = any(private.pay_variable_names())) or not (v ? (n ->> 1)) then
+        raise exception '"%" isn''t a variable', n ->> 1 using errcode = '22023';
+      end if;
+      return coalesce((v ->> (n ->> 1))::numeric, 0);
+    when 'neg' then
+      return -private.pay_eval(n -> 1, v, d + 1);
+    when '+', '-', '*', '/', '>', '>=', '<', '<=', '=', '!=' then
+      if len <> 3 then raise exception 'The formula isn''t valid' using errcode = '22023'; end if;
+      a := private.pay_eval(n -> 1, v, d + 1);
+      b := private.pay_eval(n -> 2, v, d + 1);
+      return case op
+        when '+' then a + b
+        when '-' then a - b
+        when '*' then a * b
+        when '/' then case when b = 0 then 0 else a / b end
+        when '>' then (a > b)::int
+        when '>=' then (a >= b)::int
+        when '<' then (a < b)::int
+        when '<=' then (a <= b)::int
+        when '=' then (a = b)::int
+        else (a <> b)::int end;
+    when 'IF' then
+      if len <> 4 then raise exception 'IF needs 3 values' using errcode = '22023'; end if;
+      if private.pay_eval(n -> 1, v, d + 1) <> 0 then
+        return private.pay_eval(n -> 2, v, d + 1);
+      end if;
+      return private.pay_eval(n -> 3, v, d + 1);
+    when 'AND', 'OR' then
+      if len < 3 then raise exception '% needs at least 2 values', op using errcode = '22023'; end if;
+      for i in 1 .. len - 1 loop
+        a := private.pay_eval(n -> i, v, d + 1);
+        if op = 'AND' and a = 0 then return 0; end if;
+        if op = 'OR' and a <> 0 then return 1; end if;
+      end loop;
+      return case when op = 'AND' then 1 else 0 end;
+    when 'MIN', 'MAX' then
+      if len < 3 then raise exception '% needs at least 2 values', op using errcode = '22023'; end if;
+      for i in 1 .. len - 1 loop
+        a := private.pay_eval(n -> i, v, d + 1);
+        r := case when r is null then a when op = 'MIN' then least(r, a) else greatest(r, a) end;
+      end loop;
+      return r;
+    when 'ROUND' then
+      if len not in (2, 3) then raise exception 'ROUND needs 1 or 2 values' using errcode = '22023'; end if;
+      a := private.pay_eval(n -> 1, v, d + 1);
+      b := case when len = 3 then private.pay_eval(n -> 2, v, d + 1) else 0 end;
+      return round(a, least(greatest(round(b), 0), 6)::int);
+    else
+      raise exception 'The formula uses something that isn''t allowed' using errcode = '22023';
+  end case;
+end $$;
+
+-- Rules from the builder: [{label, join, clauses: [{var, op, value}], outcome: {type, value}}]
+create or replace function private.pay_rules_check(p_rules jsonb)
+returns void
+language plpgsql immutable set search_path = '' as $$
+declare
+  r jsonb;
+  c jsonb;
+begin
+  if jsonb_typeof(p_rules) <> 'array' then raise exception 'Rules aren''t valid' using errcode = '22023'; end if;
+  if jsonb_array_length(p_rules) > 20 then raise exception 'Use up to 20 rules' using errcode = '22023'; end if;
+  for r in select * from jsonb_array_elements(p_rules) loop
+    if coalesce(r ->> 'join', '') not in ('and', 'or') or jsonb_typeof(r -> 'clauses') <> 'array' or jsonb_array_length(r -> 'clauses') = 0 then
+      raise exception 'Each rule needs at least one condition' using errcode = '22023';
+    end if;
+    if coalesce(r #>> '{outcome,type}', '') not in ('full', 'percent', 'nothing', 'subtract', 'fixed') then
+      raise exception 'Choose what each rule does' using errcode = '22023';
+    end if;
+    if r #>> '{outcome,type}' in ('percent', 'subtract', 'fixed') and jsonb_typeof(r #> '{outcome,value}') <> 'number' then
+      raise exception 'Enter the amount or percentage for rule "%"', r ->> 'label' using errcode = '22023';
+    end if;
+    for c in select * from jsonb_array_elements(r -> 'clauses') loop
+      if not ((c ->> 'var') = any(private.pay_variable_names())) or coalesce(c ->> 'op', '') not in ('>=', '>', '<=', '<', '=', '!=')
+         or jsonb_typeof(c -> 'value') <> 'number' then
+        raise exception 'A condition in rule "%" isn''t complete', r ->> 'label' using errcode = '22023';
+      end if;
+    end loop;
+  end loop;
+end $$;
+
+create or replace function private.pay_rule_matches(p_rule jsonb, v jsonb)
+returns boolean
+language sql immutable set search_path = '' as $$
+  select case when p_rule ->> 'join' = 'or' then bool_or(ok) else bool_and(ok) end
+    from (
+      select case c ->> 'op'
+               when '>=' then x >= val when '>' then x > val when '<=' then x <= val
+               when '<' then x < val when '=' then x = val else x <> val end as ok
+        from jsonb_array_elements(p_rule -> 'clauses') c,
+             lateral (select coalesce((v ->> (c ->> 'var'))::numeric, 0) as x, (c ->> 'value')::numeric as val) y) t
+$$;
+
+-- Checks an item before it's saved.
+create or replace function private.pay_item_check(c public.pay_components)
+returns void
+language plpgsql stable set search_path = '' as $$
+declare
+  v_sample jsonb := (select jsonb_object_agg(k, 1) from unnest(private.pay_variable_names()) k);
+begin
+  if c.method = 'formula' then
+    if c.formula_ast is null then raise exception 'Type the formula' using errcode = '22023'; end if;
+    perform private.pay_eval(c.formula_ast, v_sample);
+  end if;
+  if c.method = 'per_occurrence' and not (coalesce(c.occurrence_var, '') = any(private.pay_variable_names())) then
+    raise exception 'Choose what is counted' using errcode = '22023';
+  end if;
+  if c.method = 'percent' and c.default_percent is null then
+    raise exception 'Enter the percentage of basic salary' using errcode = '22023';
+  end if;
+  if c.rules_mode = 'builder' then
+    perform private.pay_rules_check(c.rules);
+  elsif c.rules_mode = 'formula' then
+    if c.rules_ast is null then raise exception 'Type the rule formula' using errcode = '22023'; end if;
+    perform private.pay_eval(c.rules_ast, v_sample);
+  end if;
+end $$;
+
+create or replace function private.pay_component_guard() returns trigger
+language plpgsql set search_path = '' as $$
+begin
+  perform private.pay_item_check(new);
+  -- The older field some screens still read.
+  new.calc_type := case new.method when 'percent' then 'percent_of_basic' when 'per_day' then 'per_day_present' when 'fixed' then 'fixed' else 'manual' end;
+  new.updated_by := coalesce(auth.uid(), new.updated_by);
+  return new;
+end $$;
+create trigger pay_component_guard before insert or update on public.pay_components
+  for each row execute function private.pay_component_guard();
+
+-- ---------------------------------------------------------------------
+-- 3. Each person's numbers for a pay period
+-- ---------------------------------------------------------------------
+create or replace function private.pay_vars(p_business uuid, p_employee uuid, p_start date, p_end date)
+returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare
+  e public.employees;
+  v_from date;
+  v_to date;
+  v_basic numeric := 0;
+  v_basis text := 'monthly';
+  v_working int := 0;
+  v_working_employed int := 0;
+  v_has_att boolean;
+  v_has_leave boolean;
+  v_unpaid numeric := 0;
+  -- Plain typed variables (not a record), so the numbers have the same types whichever way they're worked out.
+  v_present numeric := 0;
+  v_half int := 0;
+  v_absent int := 0;
+  v_on_leave int := 0;
+  v_late int := 0;
+  v_early int := 0;
+  v_ot numeric := 0;
+  v_run int := 0;
+  v_cap int;
+  d date;
+begin
+  select * into e from public.employees where id = p_employee and business_id = p_business;
+  v_from := greatest(p_start, coalesce(e.join_date, p_start));
+  v_to := least(p_end, coalesce(e.exit_date, p_end));
+  select c.basic_salary, c.pay_basis into v_basic, v_basis from public.employee_compensation c
+   where c.employee_id = p_employee and c.effective_date <= p_end order by c.effective_date desc limit 1;
+  v_has_att := exists (select 1 from public.business_modules where business_id = p_business and module_key = 'attendance' and enabled);
+  v_has_leave := exists (select 1 from public.business_modules where business_id = p_business and module_key = 'leave' and enabled);
+
+  -- Working days in the whole period (so a month's allowance is measured against the full month).
+  d := p_start;
+  while d <= p_end loop
+    if (select dp.kind from private.day_plan(p_business, p_employee, d) dp) = 'working' then
+      v_working := v_working + 1;
+      if d between v_from and v_to then v_working_employed := v_working_employed + 1; end if;
+    end if;
+    d := d + 1;
+  end loop;
+
+  if v_has_leave and v_from <= v_to then
+    select coalesce(sum(private.leave_days(p_business, lr.leave_type_id, greatest(lr.start_date, v_from), least(lr.end_date, v_to),
+               case when lr.start_date >= v_from then lr.start_half else 'full' end,
+               case when lr.end_date <= v_to then lr.end_half else 'full' end, e.branch_id)), 0)
+      into v_unpaid
+      from public.leave_requests lr join public.leave_types lt on lt.id = lr.leave_type_id
+     where lr.employee_id = p_employee and lr.status = 'approved' and not lt.is_paid
+       and lr.start_date <= v_to and lr.end_date >= v_from;
+  end if;
+
+  if v_has_att and v_from <= v_to then
+    v_cap := coalesce(((private.policy_for(p_business, p_employee)).overtime_monthly_cap_hours * 60)::int, 2147483647);
+    select count(*) filter (where x.status in ('present', 'late', 'early_leave') and x.kind = 'working') as present,
+           count(*) filter (where x.status = 'half_day') as half,
+           count(*) filter (where x.status = 'absent') as absent,
+           count(*) filter (where x.status = 'on_leave') as on_leave,
+           count(*) filter (where x.late_minutes > 0) as late_n,
+           count(*) filter (where x.status = 'early_leave') as early_n,
+           least(coalesce(sum(x.overtime_minutes) filter (where x.overtime_state = 'approved'), 0), v_cap) as ot
+      into v_present, v_half, v_absent, v_on_leave, v_late, v_early, v_ot
+      from private.attendance_days(p_business, v_from, v_to, p_employee) x;
+    select coalesce(max(n), 0) into v_run from (
+      select count(*) as n from (
+        select status, row_number() over (order by day) - row_number() over (partition by status = 'absent' order by day) as grp
+          from private.attendance_days(p_business, v_from, v_to, p_employee)
+         where status is not null and status not in ('rest_day', 'holiday')) y
+       where status = 'absent' group by grp) z;
+  else
+    -- Without Time & shifts, everyone counts as present on their working days (less unpaid leave).
+    v_present := greatest(v_working_employed - v_unpaid, 0);
+  end if;
+
+  return jsonb_build_object(
+    'basic_salary', coalesce(v_basic, 0),
+    'days_in_month', p_end - p_start + 1,
+    'working_days', v_working,
+    'days_present', coalesce(v_present, 0) + 0.5 * coalesce(v_half, 0),
+    'unapproved_absences', coalesce(v_absent, 0),
+    'approved_absences', coalesce(v_on_leave, 0),
+    'half_days', coalesce(v_half, 0),
+    'late_count', coalesce(v_late, 0),
+    'early_leaves', coalesce(v_early, 0),
+    'consecutive_unapproved_absences', coalesce(v_run, 0),
+    'overtime_hours', round(coalesce(v_ot, 0) / 60.0, 2),
+    'unpaid_leave_days', v_unpaid,
+    'years_of_service', case when e.join_date is null or e.join_date > p_end then 0 else extract(year from age(p_end, e.join_date))::int end,
+    'amount', 0,
+    -- Not formula variables; used to explain results.
+    '_days_employed', greatest(v_to - v_from + 1, 0),
+    '_pay_basis', coalesce(v_basis, 'monthly'),
+    '_has_salary', v_basic is not null);
+end $$;
+
+create or replace function private.pay_money(p_amount numeric, p_currency text)
+returns text
+language sql immutable as $$
+  select coalesce(p_currency, 'MVR') || ' ' || to_char(round(coalesce(p_amount, 0), 2), 'FM999,999,999,990.00')
+$$;
+
+create or replace function private.pay_num(p numeric)
+returns text
+language sql immutable as $$
+  select rtrim(rtrim(to_char(round(coalesce(p, 0), 2), 'FM999,999,999,990.00'), '0'), '.')
+$$;
+
+-- ---------------------------------------------------------------------
+-- 4. One item for one person: who gets it, how much, and why
+-- ---------------------------------------------------------------------
+create or replace function private.pay_item_applies(c public.pay_components, p_employee uuid, p_start date, p_end date, p_targets jsonb default null)
+returns boolean
+language plpgsql stable security definer set search_path = '' as $$
+declare
+  e public.employees;
+begin
+  if not c.is_active or (c.effective_from is not null and c.effective_from > p_end) or (c.effective_to is not null and c.effective_to < p_start) then
+    return false;
+  end if;
+  if c.applies_to = 'all' then return true; end if;
+  if c.id is not null and exists (select 1 from public.employee_pay_components o where o.component_id = c.id and o.employee_id = p_employee
+                                    and o.start_date <= p_end and (o.end_date is null or o.end_date >= p_start)) then
+    return true;
+  end if;
+  select * into e from public.employees where id = p_employee;
+  if p_targets is not null then
+    return exists (select 1 from jsonb_array_elements(p_targets) t
+                    where (t ->> 'target_type' = 'employee' and (t ->> 'target_id')::uuid = e.id)
+                       or (t ->> 'target_type' = 'department' and (t ->> 'target_id')::uuid = e.department_id)
+                       or (t ->> 'target_type' = 'position' and (t ->> 'target_id')::uuid = e.position_id)
+                       or (t ->> 'target_type' = 'branch' and (t ->> 'target_id')::uuid = e.branch_id));
+  end if;
+  return exists (select 1 from public.pay_component_targets t where t.component_id = c.id and (
+                   (t.target_type = 'employee' and t.target_id = e.id) or (t.target_type = 'department' and t.target_id = e.department_id)
+                   or (t.target_type = 'position' and t.target_id = e.position_id) or (t.target_type = 'branch' and t.target_id = e.branch_id)));
+end $$;
+
+create or replace function private.pay_item_result(c public.pay_components, p_employee uuid, p_start date, p_end date, p_vars jsonb, p_currency text)
+returns table (amount numeric, explanation text)
+language plpgsql stable security definer set search_path = '' as $$
+declare
+  ov record;
+  v_amount numeric;
+  v_pct numeric;
+  v_basis numeric;
+  v_count numeric;
+  v_n numeric;
+  r numeric;
+  v_out numeric;
+  v_expl text;
+  v_rule jsonb;
+  v_vars jsonb;
+  v_unit text;
+  m text;
+begin
+  select o.amount, o.percent into ov from public.employee_pay_components o
+   where o.component_id = c.id and o.employee_id = p_employee and o.start_date <= p_end and (o.end_date is null or o.end_date >= p_start)
+   order by o.start_date desc limit 1;
+  v_amount := coalesce(ov.amount, c.default_amount, 0);
+  v_pct := coalesce(ov.percent, c.default_percent, 0);
+  v_vars := p_vars || jsonb_build_object('amount', v_amount);
+
+  case c.method
+    when 'fixed' then
+      r := v_amount;
+      v_expl := private.pay_money(v_amount, p_currency) || ' a month';
+    when 'per_day' then
+      r := v_amount * (p_vars ->> 'days_present')::numeric;
+      v_expl := private.pay_money(v_amount, p_currency) || ' × ' || private.pay_num((p_vars ->> 'days_present')::numeric) || ' days present = ' || private.pay_money(r, p_currency);
+    when 'prorated' then
+      if c.prorate_basis = 'working' then
+        v_basis := (p_vars ->> 'working_days')::numeric;
+        v_count := (p_vars ->> 'days_present')::numeric;
+        v_unit := ' working days';
+      else
+        -- Calendar days: every day they were employed counts, less the days they should have been at work and weren't.
+        v_basis := (p_vars ->> 'days_in_month')::numeric;
+        v_count := greatest(0, (p_vars ->> '_days_employed')::numeric - (p_vars ->> 'unapproved_absences')::numeric
+                               - (p_vars ->> 'unpaid_leave_days')::numeric - 0.5 * (p_vars ->> 'half_days')::numeric);
+        v_unit := ' days in the month';
+      end if;
+      r := case when v_basis > 0 then v_amount * v_count / v_basis else 0 end;
+      v_expl := private.pay_money(v_amount, p_currency) || ' × ' || private.pay_num(v_count) || ' of ' || private.pay_num(v_basis) || v_unit
+                || ' = ' || private.pay_money(r, p_currency);
+    when 'percent' then
+      r := (p_vars ->> 'basic_salary')::numeric * v_pct / 100;
+      v_expl := private.pay_num(v_pct) || '% of basic salary ' || private.pay_money((p_vars ->> 'basic_salary')::numeric, p_currency)
+                || ' = ' || private.pay_money(r, p_currency);
+    when 'per_occurrence' then
+      v_count := coalesce((p_vars ->> c.occurrence_var)::numeric, 0);
+      v_n := greatest(0, v_count - c.occurrence_after);
+      r := v_amount * v_n;
+      v_unit := case c.occurrence_var
+                  when 'late_count' then case when v_count = 1 then 'late' else 'lates' end
+                  when 'early_leaves' then case when v_count = 1 then 'early leave' else 'early leaves' end
+                  when 'unapproved_absences' then case when v_count = 1 then 'unapproved absence' else 'unapproved absences' end
+                  when 'half_days' then case when v_count = 1 then 'half day' else 'half days' end
+                  else replace(c.occurrence_var, '_', ' ') end;
+      v_expl := private.pay_num(v_count) || ' ' || v_unit
+                || case when c.occurrence_after > 0 then ', the first ' || c.occurrence_after || ' free, so ' || private.pay_num(v_n) || ' counted' else '' end
+                || ': ' || private.pay_money(v_amount, p_currency) || ' × ' || private.pay_num(v_n) || ' = ' || private.pay_money(r, p_currency);
+    else
+      r := private.pay_eval(c.formula_ast, v_vars);
+      v_expl := c.formula || ' = ' || private.pay_money(r, p_currency);
+  end case;
+  r := round(greatest(coalesce(r, 0), 0), 2);
+  v_out := r;
+
+  if c.rules_mode = 'builder' and jsonb_array_length(c.rules) > 0 then
+    v_vars := p_vars || jsonb_build_object('amount', r);
+    select x into v_rule from jsonb_array_elements(c.rules) with ordinality t(x, i)
+     where private.pay_rule_matches(x, v_vars) order by i limit 1;
+    if v_rule is null then
+      v_expl := v_expl || '. No rule matched, so it''s paid in full';
+    else
+      m := v_rule #>> '{outcome,type}';
+      v_out := case m
+        when 'percent' then r * (v_rule #>> '{outcome,value}')::numeric / 100
+        when 'nothing' then 0
+        when 'subtract' then greatest(r - (v_rule #>> '{outcome,value}')::numeric, 0)
+        when 'fixed' then (v_rule #>> '{outcome,value}')::numeric
+        else r end;
+      v_expl := v_expl || '. Rule ''' || coalesce(nullif(v_rule ->> 'label', ''), 'rule') || ''' applied: ' || case m
+        when 'percent' then private.pay_num((v_rule #>> '{outcome,value}')::numeric) || '% = ' || private.pay_money(v_out, p_currency)
+        when 'nothing' then 'nothing paid'
+        when 'subtract' then private.pay_money(r, p_currency) || ' − ' || private.pay_money((v_rule #>> '{outcome,value}')::numeric, p_currency) || ' = ' || private.pay_money(v_out, p_currency)
+        when 'fixed' then 'set to ' || private.pay_money(v_out, p_currency)
+        else 'paid in full' end;
+    end if;
+  elsif c.rules_mode = 'formula' and c.rules_ast is not null then
+    v_out := private.pay_eval(c.rules_ast, p_vars || jsonb_build_object('amount', r));
+    v_expl := v_expl || '. Rule formula ' || c.rules_formula || ' gives ' || private.pay_money(greatest(v_out, 0), p_currency);
+  end if;
+
+  amount := round(greatest(coalesce(v_out, 0), 0), 2);
+  explanation := v_expl;
+  return next;
+end $$;
+
+-- ---------------------------------------------------------------------
+-- 5. Test panel: every item for one person and month (optionally with an unsaved draft)
+-- ---------------------------------------------------------------------
+create or replace function public.pay_items_preview(p_business uuid, p_employee uuid, p_month date, p_draft jsonb default null)
+returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_start date := date_trunc('month', p_month)::date;
+  v_end date := (date_trunc('month', p_month) + interval '1 month - 1 day')::date;
+  v_vars jsonb;
+  v_currency text;
+  c public.pay_components;
+  v_draft public.pay_components;
+  v_items jsonb := '[]'::jsonb;
+  v_amt numeric;
+  v_ex text;
+  v_applies boolean;
+  v_targets jsonb;
+begin
+  if p_business not in (select private.biz_all('payroll', 'view')) or not private.can_emp('compensation', 'view', p_business, p_employee) then
+    raise exception 'You don''t have permission to see this person''s pay' using errcode = '42501';
+  end if;
+  if not exists (select 1 from public.employees where id = p_employee and business_id = p_business) then
+    raise exception 'Choose a person' using errcode = '22023';
+  end if;
+  select currency into v_currency from public.businesses where id = p_business;
+  v_vars := private.pay_vars(p_business, p_employee, v_start, v_end);
+
+  if p_draft is not null then
+    select * into v_draft from public.pay_components where id = (p_draft ->> 'id')::uuid and business_id = p_business;
+    v_draft := jsonb_populate_record(coalesce(v_draft, null::public.pay_components), (p_draft - 'targets') || jsonb_build_object('business_id', p_business));
+    v_draft.is_active := true;
+    perform private.pay_item_check(v_draft);
+  end if;
+
+  for c in select * from public.pay_components pc where pc.business_id = p_business and pc.is_active
+            and (v_draft.id is null or pc.id <> v_draft.id)
+           union all select v_draft.* where p_draft is not null
+           order by kind desc, sort, name loop
+    v_targets := case when p_draft is not null and c.id is not distinct from v_draft.id then p_draft -> 'targets' end;
+    v_applies := private.pay_item_applies(c, p_employee, v_start, v_end, v_targets);
+    v_amt := null;
+    v_ex := null;
+    if v_applies then
+      select x.amount, x.explanation into v_amt, v_ex from private.pay_item_result(c, p_employee, v_start, v_end, v_vars, v_currency) x;
+    end if;
+    v_items := v_items || jsonb_build_object(
+      'id', c.id, 'name', c.name, 'kind', c.kind, 'draft', p_draft is not null and c.id is not distinct from v_draft.id,
+      'applies', v_applies,
+      'why_not', case when v_applies then null
+                      when (c.effective_from is not null and c.effective_from > v_end) or (c.effective_to is not null and c.effective_to < v_start) then 'Not in effect that month'
+                      else 'Not for this person' end,
+      'amount', v_amt, 'explanation', v_ex);
+  end loop;
+  return jsonb_build_object('vars', v_vars, 'currency', v_currency, 'start', v_start, 'end', v_end, 'items', v_items);
+end $$;
+revoke all on function public.pay_items_preview(uuid, uuid, date, jsonb) from public, anon;
+grant execute on function public.pay_items_preview(uuid, uuid, date, jsonb) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 6. Unapproved absences come off pay through an item each company has
+-- ---------------------------------------------------------------------
+create or replace function private.ensure_absence_item(p_business uuid)
+returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  insert into public.pay_components (business_id, code, name, kind, category, method, default_amount, formula, formula_ast,
+                                     is_taxable, is_pensionable, applies_to, template_key, description, sort)
+  values (p_business, 'ABSENCE', 'Unapproved absence deduction', 'deduction', 'absence', 'formula', 0,
+          'ROUND(basic_salary / working_days * unapproved_absences, 2)',
+          '["ROUND", ["*", ["/", ["var", "basic_salary"], ["var", "working_days"]], ["var", "unapproved_absences"]], ["num", 2]]'::jsonb,
+          false, false, 'all', 'absence_deduction', 'A day''s basic salary for each unapproved absence.', 900)
+  on conflict (business_id, code) do nothing;
+end $$;
+
+create or replace function private.on_payroll_enabled() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if new.module_key = 'payroll' and new.enabled then
+    perform private.ensure_absence_item(new.business_id);
+  end if;
+  return new;
+end $$;
+create trigger payroll_enabled_absence_item after insert or update of enabled on public.business_modules
+  for each row execute function private.on_payroll_enabled();
+
+select private.ensure_absence_item(business_id) from public.business_modules where module_key = 'payroll' and enabled;
+
+-- ---------------------------------------------------------------------
+-- 7. Payroll uses the items (and explains each line)
+-- ---------------------------------------------------------------------
+create or replace function public.calculate_payroll_run(p_run uuid)
+returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare
+  r public.payroll_runs;
+  b public.businesses;
+  e public.employees;
+  p public.attendance_policies;
+  pen public.pension_schemes;
+  tax public.tax_tables;
+  comp record;
+  pc public.pay_components;
+  cl record;
+  ln record;
+  ar record;
+  res record;
+  v_vars jsonb;
+  v_re uuid;
+  v_days int;
+  v_workdays int;
+  v_from date;
+  v_to date;
+  v_employed int;
+  v_unpaid numeric;
+  v_paid_days numeric;
+  v_present numeric;
+  v_worked_h numeric;
+  v_ot_h numeric;
+  v_basic numeric;
+  v_salary numeric;
+  v_hourly numeric;
+  v_amount numeric;
+  v_rate numeric;
+  v_gross numeric;
+  v_taxable numeric;
+  v_pensionable numeric;
+  v_ded numeric;
+  v_employer numeric;
+  v_pen_emp numeric;
+  v_tax numeric;
+  v_exc jsonb;
+  v_has_att boolean;
+  v_has_claims boolean;
+  v_bank record;
+  v_holiday boolean;
+  v_n int := 0;
+  v_ot_cap int;
+  v_ot_used int;
+  v_ot_take int;
+  d date;
+begin
+  select * into r from public.payroll_runs where id = p_run for update;
+  if not found or r.business_id not in (select private.biz_all('payroll', 'edit')) then
+    raise exception 'You don''t have permission to calculate this pay run' using errcode = '42501';
+  end if;
+  if r.status not in ('draft', 'calculated') then
+    raise exception 'This pay run is finalized and locked' using errcode = '42501';
+  end if;
+  select * into b from public.businesses where id = r.business_id;
+  v_has_att := exists (select 1 from public.business_modules where business_id = r.business_id and module_key = 'attendance' and enabled);
+  v_has_claims := exists (select 1 from public.business_modules where business_id = r.business_id and module_key = 'claims' and enabled);
+  select * into pen from public.pension_schemes where business_id = r.business_id and is_active and effective_from <= r.period_end order by effective_from desc limit 1;
+  select * into tax from public.tax_tables where business_id = r.business_id and is_active and effective_from <= r.period_end order by effective_from desc limit 1;
+
+  -- Start again: forget the previous calculation (people kept on hold stay on hold).
+  create temp table if not exists _held (employee_id uuid) on commit drop;
+  delete from _held where true;
+  insert into _held select employee_id from public.payroll_run_employees where run_id = r.id and status in ('excluded', 'on_hold');
+  create temp table if not exists _manual (employee_id uuid, code text, name text, kind text, amount numeric, is_taxable boolean, is_pensionable boolean) on commit drop;
+  delete from _manual where true;
+  insert into _manual select employee_id, code, name, kind, amount, is_taxable, is_pensionable
+    from public.payroll_run_lines where run_id = r.id and source = 'manual';
+  update public.claims set payroll_run_id = null where payroll_run_id = r.id and status = 'approved';
+  delete from public.payroll_run_employees where run_id = r.id;
+
+  v_days := r.period_end - r.period_start + 1;
+  v_workdays := 0;
+  d := r.period_start;
+  while d <= r.period_end loop
+    if extract(dow from d)::smallint = any(b.working_days) then v_workdays := v_workdays + 1; end if;
+    d := d + 1;
+  end loop;
+
+  for e in select * from public.employees
+            where business_id = r.business_id
+              and (join_date is null or join_date <= r.period_end)
+              and (exit_date is null or exit_date >= r.period_start)
+              and not (status in ('resigned', 'terminated') and exit_date is null)
+            order by first_name, last_name loop
+    v_exc := '[]'::jsonb;
+    v_from := greatest(r.period_start, coalesce(e.join_date, r.period_start));
+    v_to := least(r.period_end, coalesce(e.exit_date, r.period_end));
+    v_employed := v_to - v_from + 1;
+
+    select * into comp from public.employee_compensation
+     where employee_id = e.id and effective_date <= r.period_end order by effective_date desc limit 1;
+    select ba.bank_name, ba.account_name, ba.account_number into v_bank
+      from public.employee_bank_accounts ba where ba.employee_id = e.id order by ba.is_primary desc limit 1;
+
+    -- The month's numbers, shared with the allowances and deductions.
+    v_vars := private.pay_vars(r.business_id, e.id, r.period_start, r.period_end);
+    v_unpaid := (v_vars ->> 'unpaid_leave_days')::numeric;
+    v_present := (v_vars ->> 'days_present')::numeric;
+    v_worked_h := 0; v_ot_h := (v_vars ->> 'overtime_hours')::numeric;
+    if v_has_att then
+      select coalesce(sum(worked_minutes), 0) / 60.0 into v_worked_h
+        from public.attendance_records where employee_id = e.id and work_date between v_from and v_to;
+    end if;
+
+    v_basic := coalesce(comp.basic_salary, 0);
+    if comp.basic_salary is null then
+      v_exc := v_exc || jsonb_build_object('code', 'no_salary', 'message', 'No salary on their profile', 'severity', 'error');
+    end if;
+    if v_bank.account_number is null then
+      v_exc := v_exc || jsonb_build_object('code', 'no_bank', 'message', 'No bank account on their profile', 'severity', 'warning');
+    end if;
+
+    -- Salary for the part of the period they were employed, less unpaid leave.
+    -- (Unapproved absences come off through the absence deduction item.)
+    if coalesce(comp.pay_basis, 'monthly') = 'monthly' then
+      v_paid_days := greatest(0, v_employed - v_unpaid * v_days::numeric / greatest(v_workdays, 1));
+      v_salary := round(v_basic * v_paid_days / v_days, 2);
+      v_hourly := v_basic / greatest(v_workdays * coalesce(nullif((select full_day_hours from public.attendance_policies where business_id = r.business_id and is_default), 0), 8), 1);
+    elsif comp.pay_basis = 'daily' then
+      v_paid_days := v_present;
+      v_salary := round(v_basic * v_present, 2);
+      v_hourly := v_basic / 8;
+      if not v_has_att then
+        v_exc := v_exc || jsonb_build_object('code', 'daily_no_time', 'message', 'Paid by the day, but Time & shifts is off', 'severity', 'warning');
+      end if;
+    else
+      v_paid_days := v_present;
+      v_salary := round(v_basic * v_worked_h, 2);
+      v_hourly := v_basic;
+    end if;
+
+    insert into public.payroll_run_employees (business_id, run_id, employee_id, employee_code, employee_name, department_name, position_title,
+      branch_name, bank_name, bank_account_name, bank_account_number, basic_salary, period_days, paid_days, unpaid_leave_days, absent_days,
+      worked_hours, overtime_hours, status)
+    values (r.business_id, r.id, e.id, e.employee_code, trim(e.first_name || ' ' || e.last_name),
+      (select name from public.departments where id = e.department_id), (select title from public.positions where id = e.position_id),
+      (select name from public.branches where id = e.branch_id), v_bank.bank_name, v_bank.account_name, v_bank.account_number,
+      v_basic, v_days, round(v_paid_days, 2), v_unpaid, (v_vars ->> 'unapproved_absences')::numeric, round(v_worked_h, 2), round(v_ot_h, 2),
+      case when e.id in (select employee_id from _held) then 'on_hold' else 'included' end)
+    returning id into v_re;
+    v_n := v_n + 1;
+
+    -- Earnings --------------------------------------------------------
+    insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, quantity, rate, amount, is_taxable, is_pensionable, source, sort, explanation)
+    values (r.business_id, r.id, v_re, e.id, 'BASIC', 'Basic salary', 'earning', round(v_paid_days, 2), v_basic, v_salary, true, true, 'salary', 0,
+            case when coalesce(comp.pay_basis, 'monthly') = 'monthly' and v_salary <> v_basic
+                 then private.pay_money(v_basic, b.currency) || ' × ' || private.pay_num(v_paid_days) || ' of ' || v_days || ' days paid' end);
+
+    -- Allowances and deductions: every item that applies to them this period.
+    for pc in select * from public.pay_components where business_id = r.business_id and is_active order by kind desc, sort, name loop
+      continue when not private.pay_item_applies(pc, e.id, r.period_start, r.period_end);
+      select * into res from private.pay_item_result(pc, e.id, r.period_start, r.period_end, v_vars, b.currency);
+      continue when coalesce(res.amount, 0) = 0;
+      insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, component_id, code, name, kind, amount, is_taxable, is_pensionable, source, sort, explanation)
+      values (r.business_id, r.id, v_re, e.id, pc.id, pc.code, pc.name, pc.kind, res.amount,
+              pc.kind = 'earning' and pc.is_taxable, pc.kind = 'earning' and pc.is_pensionable, 'component',
+              case when pc.kind = 'earning' then 10 else 75 end + least(pc.sort, 900) / 100, res.explanation);
+    end loop;
+
+    -- Overtime from time records, at the rate for the kind of day.
+    if v_has_att then
+      p := private.policy_for(r.business_id, e.id);
+      v_ot_cap := coalesce((p.overtime_monthly_cap_hours * 60)::int, 2147483647);
+      v_ot_used := 0;
+      for ar in select work_date, overtime_minutes, overtime_type from public.attendance_records
+                 where employee_id = e.id and work_date between v_from and v_to and overtime_minutes > 0
+                   and (ot_decision = 'approved' or not coalesce(p.overtime_requires_approval, false))
+                 order by work_date loop
+        v_ot_take := least(ar.overtime_minutes, greatest(0, v_ot_cap - v_ot_used));
+        v_ot_used := v_ot_used + v_ot_take;
+        continue when v_ot_take = 0;
+        v_holiday := exists (select 1 from public.public_holidays h where h.business_id = r.business_id and h.holiday_date = ar.work_date and not h.is_optional);
+        v_rate := case ar.overtime_type
+                    when 'holiday' then coalesce(p.overtime_rate_holiday, 1.5)
+                    when 'rest_day' then coalesce(p.overtime_rate_rest_day, 1.5)
+                    when 'normal' then coalesce(p.overtime_rate_weekday, 1.25)
+                    else case when v_holiday then coalesce(p.overtime_rate_holiday, 1.5)
+                       when not (extract(dow from ar.work_date)::smallint = any(b.working_days)) then coalesce(p.overtime_rate_rest_day, 1.5)
+                       else coalesce(p.overtime_rate_weekday, 1.25) end end;
+        insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, quantity, rate, amount, is_taxable, is_pensionable, source, sort)
+        values (r.business_id, r.id, v_re, e.id, 'OT', 'Overtime ' || to_char(ar.work_date, 'DD Mon') || ' (x' || trim(to_char(v_rate, 'FM0.00')) || ')', 'earning',
+                round(v_ot_take / 60.0, 2), round(v_hourly * v_rate, 4), round(v_ot_take / 60.0 * v_hourly * v_rate, 2), true, false, 'overtime', 50);
+      end loop;
+    end if;
+
+    -- Approved claims paid through payroll, up to this period (claims stay separate from allowances).
+    if v_has_claims then
+      for cl in select c.id, c.amount, t.name, c.claim_date from public.claims c join public.claim_types t on t.id = c.claim_type_id
+                 where c.employee_id = e.id and c.status = 'approved' and c.payout_method = 'payroll' and c.payroll_run_id is null
+                   and coalesce(c.target_period_start, c.claim_date) <= r.period_end loop
+        insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, amount, is_taxable, is_pensionable, source, source_id, sort)
+        values (r.business_id, r.id, v_re, e.id, 'CLAIM', cl.name || ' claim ' || to_char(cl.claim_date, 'DD Mon'), 'earning', cl.amount, false, false, 'expense_claim', cl.id, 60);
+        update public.claims set payroll_run_id = r.id where id = cl.id;
+      end loop;
+    end if;
+
+    -- Changes typed in by hand on this run are kept when recalculating.
+    insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, amount, is_taxable, is_pensionable, source, sort)
+    select r.business_id, r.id, v_re, e.id, m.code, m.name, m.kind, m.amount, m.is_taxable, m.is_pensionable, 'manual', 70
+      from _manual m where m.employee_id = e.id;
+
+    select coalesce(sum(amount) filter (where kind = 'earning'), 0),
+           coalesce(sum(amount) filter (where kind = 'earning' and is_taxable), 0),
+           coalesce(sum(amount) filter (where kind = 'earning' and is_pensionable), 0)
+      into v_gross, v_taxable, v_pensionable
+      from public.payroll_run_lines where run_employee_id = v_re;
+
+    -- Deductions ------------------------------------------------------
+    for ln in select id, installment_amount, outstanding, kind from public.loans
+               where employee_id = e.id and status = 'active' and start_date <= r.period_end and outstanding > 0 loop
+      insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, amount, source, source_id, sort)
+      values (r.business_id, r.id, v_re, e.id, upper(ln.kind), case when ln.kind = 'advance' then 'Salary advance' else 'Loan repayment' end, 'deduction',
+              least(ln.installment_amount, ln.outstanding), 'loan', ln.id, 80);
+    end loop;
+
+    v_pen_emp := 0; v_employer := 0;
+    if pen.id is not null and (pen.applies_to = 'all' or (pen.applies_to = 'locals') = private.is_local(e, b.country)) then
+      v_amount := case pen.wage_base when 'basic' then v_salary when 'gross' then v_gross else v_pensionable end;
+      if pen.wage_ceiling is not null then v_amount := least(v_amount, pen.wage_ceiling); end if;
+      v_pen_emp := round(v_amount * pen.employee_rate / 100, 2);
+      v_employer := round(v_amount * pen.employer_rate / 100, 2);
+      if v_pen_emp > 0 then
+        insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, rate, amount, source, sort)
+        values (r.business_id, r.id, v_re, e.id, 'PENSION', 'Pension (' || trim(to_char(pen.employee_rate, 'FM990.###')) || '%)', 'deduction', pen.employee_rate, v_pen_emp, 'statutory', 90);
+      end if;
+      if v_employer > 0 then
+        insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, rate, amount, source, sort)
+        values (r.business_id, r.id, v_re, e.id, 'PENSION_ER', 'Employer pension (' || trim(to_char(pen.employer_rate, 'FM990.###')) || '%)', 'employer_contribution', pen.employer_rate, v_employer, 'statutory', 95);
+      end if;
+    end if;
+
+    v_tax := 0;
+    if tax.id is not null and (tax.applies_to = 'all' or (tax.applies_to = 'locals') = private.is_local(e, b.country)) then
+      v_amount := greatest(v_taxable - v_pen_emp, 0);
+      v_tax := case when tax.basis = 'annual' then round(private.tax_for(tax.id, v_amount * 12) / 12, 2) else private.tax_for(tax.id, v_amount) end;
+      if v_tax > 0 then
+        insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, amount, source, sort)
+        values (r.business_id, r.id, v_re, e.id, 'TAX', 'Income tax', 'deduction', v_tax, 'statutory', 91);
+      end if;
+    end if;
+
+    select coalesce(sum(amount), 0) into v_ded from public.payroll_run_lines where run_employee_id = v_re and kind = 'deduction';
+    if v_gross - v_ded < 0 then
+      v_exc := v_exc || jsonb_build_object('code', 'negative', 'message', 'Deductions are more than pay', 'severity', 'error');
+    end if;
+    update public.payroll_run_employees set
+      gross_pay = v_gross, taxable_pay = greatest(v_taxable - v_pen_emp, 0), pensionable_pay = v_pensionable,
+      total_deductions = v_ded, net_pay = v_gross - v_ded, employer_contributions = v_employer, exceptions = v_exc
+    where id = v_re;
+  end loop;
+
+  update public.payroll_runs set
+    status = 'calculated', calculated_at = now(), calculated_by = auth.uid(),
+    employee_count = (select count(*) from public.payroll_run_employees where run_id = r.id and status = 'included'),
+    total_gross = (select coalesce(sum(gross_pay), 0) from public.payroll_run_employees where run_id = r.id and status = 'included'),
+    total_deductions = (select coalesce(sum(total_deductions), 0) from public.payroll_run_employees where run_id = r.id and status = 'included'),
+    total_net = (select coalesce(sum(net_pay), 0) from public.payroll_run_employees where run_id = r.id and status = 'included'),
+    total_employer_contributions = (select coalesce(sum(employer_contributions), 0) from public.payroll_run_employees where run_id = r.id and status = 'included')
+  where id = r.id;
+  update public.claims c set payroll_run_id = null
+   where c.payroll_run_id = r.id and c.employee_id in (select employee_id from _held);
+  return jsonb_build_object('people', v_n);
+end $$;
+
+-- ---------------------------------------------------------------------
+-- 8. Salaries: change a group at once, or import from a file
+-- ---------------------------------------------------------------------
+-- p_mode: 'percent' (raise by a percentage), 'add' (add an amount), 'set' (set to an amount).
+create or replace function public.bulk_change_salaries(
+  p_business uuid, p_employees uuid[], p_mode text, p_value numeric, p_effective date, p_reason text, p_dry_run boolean default true)
+returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare
+  e record;
+  v_new numeric;
+  v_rows jsonb := '[]'::jsonb;
+  v_n int := 0;
+begin
+  if p_business not in (select private.biz_all('compensation', 'edit')) or p_business not in (select private.biz_all('compensation', 'create')) then
+    raise exception 'You don''t have permission to change salaries' using errcode = '42501';
+  end if;
+  if p_mode not in ('percent', 'add', 'set') or p_value is null then
+    raise exception 'Choose how to change the salaries' using errcode = '22023';
+  end if;
+  if p_mode = 'percent' and (p_value <= -100 or p_value > 1000) then
+    raise exception 'Use a percentage between -99 and 1000' using errcode = '22023';
+  end if;
+  if p_effective is null then
+    raise exception 'Choose the date the new salaries start' using errcode = '22023';
+  end if;
+  if coalesce(array_length(p_employees, 1), 0) = 0 then
+    raise exception 'Choose at least one person' using errcode = '22023';
+  end if;
+  for e in select em.id, trim(em.first_name || ' ' || em.last_name) as name, em.employee_code,
+                  (select c from public.employee_compensation c where c.employee_id = em.id and c.effective_date <= p_effective
+                    order by c.effective_date desc limit 1) as cur
+             from public.employees em where em.business_id = p_business and em.id = any(p_employees) order by em.first_name loop
+    if (e.cur).basic_salary is null and p_mode <> 'set' then
+      v_rows := v_rows || jsonb_build_object('employee_id', e.id, 'name', e.name, 'code', e.employee_code, 'old', null, 'new', null,
+                                             'skipped', 'No salary yet, so there''s nothing to raise');
+      continue;
+    end if;
+    v_new := round(case p_mode when 'percent' then (e.cur).basic_salary * (1 + p_value / 100)
+                               when 'add' then (e.cur).basic_salary + p_value else p_value end, 2);
+    if v_new < 0 then
+      v_rows := v_rows || jsonb_build_object('employee_id', e.id, 'name', e.name, 'code', e.employee_code, 'old', (e.cur).basic_salary, 'new', v_new,
+                                             'skipped', 'The new salary would be below zero');
+      continue;
+    end if;
+    v_rows := v_rows || jsonb_build_object('employee_id', e.id, 'name', e.name, 'code', e.employee_code, 'old', (e.cur).basic_salary, 'new', v_new);
+    if not p_dry_run then
+      insert into public.employee_compensation (business_id, employee_id, effective_date, basic_salary, currency, pay_basis, reason)
+      values (p_business, e.id, p_effective, v_new, coalesce((e.cur).currency, (select currency from public.businesses where id = p_business)),
+              coalesce((e.cur).pay_basis, 'monthly'), nullif(trim(p_reason), ''))
+      on conflict (employee_id, effective_date) do update set basic_salary = excluded.basic_salary, reason = excluded.reason;
+    end if;
+    v_n := v_n + 1;
+  end loop;
+  return jsonb_build_object('changed', v_n, 'rows', v_rows);
+end $$;
+revoke all on function public.bulk_change_salaries(uuid, uuid[], text, numeric, date, text, boolean) from public, anon;
+grant execute on function public.bulk_change_salaries(uuid, uuid[], text, numeric, date, text, boolean) to authenticated;
+
+-- Rows: [{row, code, salary, date, basis?, reason?}]. Checks everything first; saves only when asked and nothing is wrong.
+create or replace function public.import_salaries(p_business uuid, p_rows jsonb, p_dry_run boolean default true)
+returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare
+  x jsonb;
+  v_emp uuid;
+  v_errors jsonb := '[]'::jsonb;
+  v_ok jsonb := '[]'::jsonb;
+  v_salary numeric;
+  v_date date;
+  v_basis text;
+  v_row int;
+  v_currency text;
+begin
+  if p_business not in (select private.biz_all('compensation', 'create')) or p_business not in (select private.biz_all('compensation', 'edit')) then
+    raise exception 'You don''t have permission to change salaries' using errcode = '42501';
+  end if;
+  if jsonb_typeof(p_rows) <> 'array' or jsonb_array_length(p_rows) > 5000 then
+    raise exception 'Import up to 5,000 rows at a time' using errcode = '22023';
+  end if;
+  select currency into v_currency from public.businesses where id = p_business;
+  for x in select * from jsonb_array_elements(p_rows) loop
+    v_row := coalesce((x ->> 'row')::int, 0);
+    select id into v_emp from public.employees where business_id = p_business and lower(employee_code) = lower(trim(x ->> 'code'));
+    if v_emp is null then
+      v_errors := v_errors || jsonb_build_object('row', v_row, 'message', format('No one has the staff number "%s"', coalesce(x ->> 'code', '')));
+      continue;
+    end if;
+    begin
+      v_salary := replace(trim(x ->> 'salary'), ',', '')::numeric;
+    exception when others then
+      v_salary := null;
+    end;
+    if v_salary is null or v_salary < 0 then
+      v_errors := v_errors || jsonb_build_object('row', v_row, 'message', format('"%s" isn''t a salary amount', coalesce(x ->> 'salary', '')));
+      continue;
+    end if;
+    begin
+      v_date := (x ->> 'date')::date;
+    exception when others then
+      v_date := null;
+    end;
+    if v_date is null then
+      v_errors := v_errors || jsonb_build_object('row', v_row, 'message', format('"%s" isn''t a date (use YYYY-MM-DD)', coalesce(x ->> 'date', '')));
+      continue;
+    end if;
+    v_basis := lower(coalesce(nullif(trim(x ->> 'basis'), ''), 'monthly'));
+    if v_basis not in ('monthly', 'daily', 'hourly') then
+      v_errors := v_errors || jsonb_build_object('row', v_row, 'message', format('"%s" should be monthly, daily or hourly', x ->> 'basis'));
+      continue;
+    end if;
+    v_ok := v_ok || jsonb_build_object('employee_id', v_emp, 'salary', v_salary, 'date', v_date, 'basis', v_basis, 'reason', nullif(trim(x ->> 'reason'), ''));
+  end loop;
+  if not p_dry_run and jsonb_array_length(v_errors) = 0 then
+    insert into public.employee_compensation (business_id, employee_id, effective_date, basic_salary, currency, pay_basis, reason)
+    select p_business, (o ->> 'employee_id')::uuid, (o ->> 'date')::date, (o ->> 'salary')::numeric, v_currency, o ->> 'basis', coalesce(o ->> 'reason', 'Imported')
+      from jsonb_array_elements(v_ok) o
+    on conflict (employee_id, effective_date) do update set basic_salary = excluded.basic_salary, pay_basis = excluded.pay_basis, reason = excluded.reason;
+  end if;
+  return jsonb_build_object('valid', jsonb_array_length(v_ok), 'errors', v_errors,
+                            'imported', case when not p_dry_run and jsonb_array_length(v_errors) = 0 then jsonb_array_length(v_ok) else 0 end);
+end $$;
+revoke all on function public.import_salaries(uuid, jsonb, boolean) from public, anon;
+grant execute on function public.import_salaries(uuid, jsonb, boolean) to authenticated;
+
+call private.finalize_tenant_tables();
+insert into private.schema_migrations (name) values ('20261002000001_pay_items.sql') on conflict do nothing;
+
+-- ===================== 20261002000002_pay_vars_types.sql =====================
+-- =====================================================================
+-- 0034 Fix: a person with no days employed in a pay period (for example
+--   someone who joins after it) made the monthly numbers fail for the
+--   next person worked out, which could stop a pay run. The numbers now
+--   use plain typed variables, so both ways of working them out match.
+-- =====================================================================
+create or replace function private.pay_vars(p_business uuid, p_employee uuid, p_start date, p_end date)
+returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare
+  e public.employees;
+  v_from date;
+  v_to date;
+  v_basic numeric := 0;
+  v_basis text := 'monthly';
+  v_working int := 0;
+  v_working_employed int := 0;
+  v_has_att boolean;
+  v_has_leave boolean;
+  v_unpaid numeric := 0;
+  -- Plain typed variables (not a record), so the numbers have the same types whichever way they're worked out.
+  v_present numeric := 0;
+  v_half int := 0;
+  v_absent int := 0;
+  v_on_leave int := 0;
+  v_late int := 0;
+  v_early int := 0;
+  v_ot numeric := 0;
+  v_run int := 0;
+  v_cap int;
+  d date;
+begin
+  select * into e from public.employees where id = p_employee and business_id = p_business;
+  v_from := greatest(p_start, coalesce(e.join_date, p_start));
+  v_to := least(p_end, coalesce(e.exit_date, p_end));
+  select c.basic_salary, c.pay_basis into v_basic, v_basis from public.employee_compensation c
+   where c.employee_id = p_employee and c.effective_date <= p_end order by c.effective_date desc limit 1;
+  v_has_att := exists (select 1 from public.business_modules where business_id = p_business and module_key = 'attendance' and enabled);
+  v_has_leave := exists (select 1 from public.business_modules where business_id = p_business and module_key = 'leave' and enabled);
+
+  -- Working days in the whole period (so a month's allowance is measured against the full month).
+  d := p_start;
+  while d <= p_end loop
+    if (select dp.kind from private.day_plan(p_business, p_employee, d) dp) = 'working' then
+      v_working := v_working + 1;
+      if d between v_from and v_to then v_working_employed := v_working_employed + 1; end if;
+    end if;
+    d := d + 1;
+  end loop;
+
+  if v_has_leave and v_from <= v_to then
+    select coalesce(sum(private.leave_days(p_business, lr.leave_type_id, greatest(lr.start_date, v_from), least(lr.end_date, v_to),
+               case when lr.start_date >= v_from then lr.start_half else 'full' end,
+               case when lr.end_date <= v_to then lr.end_half else 'full' end, e.branch_id)), 0)
+      into v_unpaid
+      from public.leave_requests lr join public.leave_types lt on lt.id = lr.leave_type_id
+     where lr.employee_id = p_employee and lr.status = 'approved' and not lt.is_paid
+       and lr.start_date <= v_to and lr.end_date >= v_from;
+  end if;
+
+  if v_has_att and v_from <= v_to then
+    v_cap := coalesce(((private.policy_for(p_business, p_employee)).overtime_monthly_cap_hours * 60)::int, 2147483647);
+    select count(*) filter (where x.status in ('present', 'late', 'early_leave') and x.kind = 'working') as present,
+           count(*) filter (where x.status = 'half_day') as half,
+           count(*) filter (where x.status = 'absent') as absent,
+           count(*) filter (where x.status = 'on_leave') as on_leave,
+           count(*) filter (where x.late_minutes > 0) as late_n,
+           count(*) filter (where x.status = 'early_leave') as early_n,
+           least(coalesce(sum(x.overtime_minutes) filter (where x.overtime_state = 'approved'), 0), v_cap) as ot
+      into v_present, v_half, v_absent, v_on_leave, v_late, v_early, v_ot
+      from private.attendance_days(p_business, v_from, v_to, p_employee) x;
+    select coalesce(max(n), 0) into v_run from (
+      select count(*) as n from (
+        select status, row_number() over (order by day) - row_number() over (partition by status = 'absent' order by day) as grp
+          from private.attendance_days(p_business, v_from, v_to, p_employee)
+         where status is not null and status not in ('rest_day', 'holiday')) y
+       where status = 'absent' group by grp) z;
+  else
+    -- Without Time & shifts, everyone counts as present on their working days (less unpaid leave).
+    v_present := greatest(v_working_employed - v_unpaid, 0);
+  end if;
+
+  return jsonb_build_object(
+    'basic_salary', coalesce(v_basic, 0),
+    'days_in_month', p_end - p_start + 1,
+    'working_days', v_working,
+    'days_present', coalesce(v_present, 0) + 0.5 * coalesce(v_half, 0),
+    'unapproved_absences', coalesce(v_absent, 0),
+    'approved_absences', coalesce(v_on_leave, 0),
+    'half_days', coalesce(v_half, 0),
+    'late_count', coalesce(v_late, 0),
+    'early_leaves', coalesce(v_early, 0),
+    'consecutive_unapproved_absences', coalesce(v_run, 0),
+    'overtime_hours', round(coalesce(v_ot, 0) / 60.0, 2),
+    'unpaid_leave_days', v_unpaid,
+    'years_of_service', case when e.join_date is null or e.join_date > p_end then 0 else extract(year from age(p_end, e.join_date))::int end,
+    'amount', 0,
+    -- Not formula variables; used to explain results.
+    '_days_employed', greatest(v_to - v_from + 1, 0),
+    '_pay_basis', coalesce(v_basis, 'monthly'),
+    '_has_salary', v_basic is not null);
+end $$;
+
+call private.finalize_tenant_tables();
+insert into private.schema_migrations (name) values ('20261002000002_pay_vars_types.sql') on conflict do nothing;
+
+-- ===================== 20261002000003_pay_items_employment.sql =====================
+-- =====================================================================
+-- 0035 Pay items: nobody gets an item for a period they didn't work for
+--   the company at all (the test panel says so), and "per occurrence"
+--   explanations read plainly when nothing is charged.
+-- =====================================================================
+create or replace function private.pay_item_applies(c public.pay_components, p_employee uuid, p_start date, p_end date, p_targets jsonb default null)
+returns boolean
+language plpgsql stable security definer set search_path = '' as $$
+declare
+  e public.employees;
+begin
+  if not c.is_active or (c.effective_from is not null and c.effective_from > p_end) or (c.effective_to is not null and c.effective_to < p_start) then
+    return false;
+  end if;
+  -- Nobody gets anything for a period they didn't work for us at all.
+  select * into e from public.employees where id = p_employee;
+  if (e.join_date is not null and e.join_date > p_end) or (e.exit_date is not null and e.exit_date < p_start) then
+    return false;
+  end if;
+  if c.applies_to = 'all' then return true; end if;
+  if c.id is not null and exists (select 1 from public.employee_pay_components o where o.component_id = c.id and o.employee_id = p_employee
+                                    and o.start_date <= p_end and (o.end_date is null or o.end_date >= p_start)) then
+    return true;
+  end if;
+  if p_targets is not null then
+    return exists (select 1 from jsonb_array_elements(p_targets) t
+                    where (t ->> 'target_type' = 'employee' and (t ->> 'target_id')::uuid = e.id)
+                       or (t ->> 'target_type' = 'department' and (t ->> 'target_id')::uuid = e.department_id)
+                       or (t ->> 'target_type' = 'position' and (t ->> 'target_id')::uuid = e.position_id)
+                       or (t ->> 'target_type' = 'branch' and (t ->> 'target_id')::uuid = e.branch_id));
+  end if;
+  return exists (select 1 from public.pay_component_targets t where t.component_id = c.id and (
+                   (t.target_type = 'employee' and t.target_id = e.id) or (t.target_type = 'department' and t.target_id = e.department_id)
+                   or (t.target_type = 'position' and t.target_id = e.position_id) or (t.target_type = 'branch' and t.target_id = e.branch_id)));
+end $$;
+
+create or replace function private.pay_item_result(c public.pay_components, p_employee uuid, p_start date, p_end date, p_vars jsonb, p_currency text)
+returns table (amount numeric, explanation text)
+language plpgsql stable security definer set search_path = '' as $$
+declare
+  ov record;
+  v_amount numeric;
+  v_pct numeric;
+  v_basis numeric;
+  v_count numeric;
+  v_n numeric;
+  r numeric;
+  v_out numeric;
+  v_expl text;
+  v_rule jsonb;
+  v_vars jsonb;
+  v_unit text;
+  m text;
+begin
+  select o.amount, o.percent into ov from public.employee_pay_components o
+   where o.component_id = c.id and o.employee_id = p_employee and o.start_date <= p_end and (o.end_date is null or o.end_date >= p_start)
+   order by o.start_date desc limit 1;
+  v_amount := coalesce(ov.amount, c.default_amount, 0);
+  v_pct := coalesce(ov.percent, c.default_percent, 0);
+  v_vars := p_vars || jsonb_build_object('amount', v_amount);
+
+  case c.method
+    when 'fixed' then
+      r := v_amount;
+      v_expl := private.pay_money(v_amount, p_currency) || ' a month';
+    when 'per_day' then
+      r := v_amount * (p_vars ->> 'days_present')::numeric;
+      v_expl := private.pay_money(v_amount, p_currency) || ' × ' || private.pay_num((p_vars ->> 'days_present')::numeric) || ' days present = ' || private.pay_money(r, p_currency);
+    when 'prorated' then
+      if c.prorate_basis = 'working' then
+        v_basis := (p_vars ->> 'working_days')::numeric;
+        v_count := (p_vars ->> 'days_present')::numeric;
+        v_unit := ' working days';
+      else
+        -- Calendar days: every day they were employed counts, less the days they should have been at work and weren't.
+        v_basis := (p_vars ->> 'days_in_month')::numeric;
+        v_count := greatest(0, (p_vars ->> '_days_employed')::numeric - (p_vars ->> 'unapproved_absences')::numeric
+                               - (p_vars ->> 'unpaid_leave_days')::numeric - 0.5 * (p_vars ->> 'half_days')::numeric);
+        v_unit := ' days in the month';
+      end if;
+      r := case when v_basis > 0 then v_amount * v_count / v_basis else 0 end;
+      v_expl := private.pay_money(v_amount, p_currency) || ' × ' || private.pay_num(v_count) || ' of ' || private.pay_num(v_basis) || v_unit
+                || ' = ' || private.pay_money(r, p_currency);
+    when 'percent' then
+      r := (p_vars ->> 'basic_salary')::numeric * v_pct / 100;
+      v_expl := private.pay_num(v_pct) || '% of basic salary ' || private.pay_money((p_vars ->> 'basic_salary')::numeric, p_currency)
+                || ' = ' || private.pay_money(r, p_currency);
+    when 'per_occurrence' then
+      v_count := coalesce((p_vars ->> c.occurrence_var)::numeric, 0);
+      v_n := greatest(0, v_count - c.occurrence_after);
+      r := v_amount * v_n;
+      v_unit := case c.occurrence_var
+                  when 'late_count' then case when v_count = 1 then 'late' else 'lates' end
+                  when 'early_leaves' then case when v_count = 1 then 'early leave' else 'early leaves' end
+                  when 'unapproved_absences' then case when v_count = 1 then 'unapproved absence' else 'unapproved absences' end
+                  when 'half_days' then case when v_count = 1 then 'half day' else 'half days' end
+                  else replace(c.occurrence_var, '_', ' ') end;
+      v_expl := private.pay_num(v_count) || ' ' || v_unit
+                || case when v_n = 0 and c.occurrence_after > 0 then ', within the first ' || c.occurrence_after || ' that are free, so nothing is '
+                                                                     || case when c.kind = 'deduction' then 'taken off' else 'paid' end
+                        when v_n = 0 then ', so nothing is ' || case when c.kind = 'deduction' then 'taken off' else 'paid' end
+                        else case when c.occurrence_after > 0 then ', the first ' || c.occurrence_after || ' free, so ' || private.pay_num(v_n) || ' counted' else '' end
+                             || ': ' || private.pay_money(v_amount, p_currency) || ' × ' || private.pay_num(v_n) || ' = ' || private.pay_money(r, p_currency) end;
+    else
+      r := private.pay_eval(c.formula_ast, v_vars);
+      v_expl := c.formula || ' = ' || private.pay_money(r, p_currency);
+  end case;
+  r := round(greatest(coalesce(r, 0), 0), 2);
+  v_out := r;
+
+  if c.rules_mode = 'builder' and jsonb_array_length(c.rules) > 0 then
+    v_vars := p_vars || jsonb_build_object('amount', r);
+    select x into v_rule from jsonb_array_elements(c.rules) with ordinality t(x, i)
+     where private.pay_rule_matches(x, v_vars) order by i limit 1;
+    if v_rule is null then
+      v_expl := v_expl || '. No rule matched, so it''s paid in full';
+    else
+      m := v_rule #>> '{outcome,type}';
+      v_out := case m
+        when 'percent' then r * (v_rule #>> '{outcome,value}')::numeric / 100
+        when 'nothing' then 0
+        when 'subtract' then greatest(r - (v_rule #>> '{outcome,value}')::numeric, 0)
+        when 'fixed' then (v_rule #>> '{outcome,value}')::numeric
+        else r end;
+      v_expl := v_expl || '. Rule ''' || coalesce(nullif(v_rule ->> 'label', ''), 'rule') || ''' applied: ' || case m
+        when 'percent' then private.pay_num((v_rule #>> '{outcome,value}')::numeric) || '% = ' || private.pay_money(v_out, p_currency)
+        when 'nothing' then 'nothing paid'
+        when 'subtract' then private.pay_money(r, p_currency) || ' − ' || private.pay_money((v_rule #>> '{outcome,value}')::numeric, p_currency) || ' = ' || private.pay_money(v_out, p_currency)
+        when 'fixed' then 'set to ' || private.pay_money(v_out, p_currency)
+        else 'paid in full' end;
+    end if;
+  elsif c.rules_mode = 'formula' and c.rules_ast is not null then
+    v_out := private.pay_eval(c.rules_ast, p_vars || jsonb_build_object('amount', r));
+    v_expl := v_expl || '. Rule formula ' || c.rules_formula || ' gives ' || private.pay_money(greatest(v_out, 0), p_currency);
+  end if;
+
+  amount := round(greatest(coalesce(v_out, 0), 0), 2);
+  explanation := v_expl;
+  return next;
+end $$;
+
+create or replace function public.pay_items_preview(p_business uuid, p_employee uuid, p_month date, p_draft jsonb default null)
+returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_start date := date_trunc('month', p_month)::date;
+  v_end date := (date_trunc('month', p_month) + interval '1 month - 1 day')::date;
+  v_vars jsonb;
+  v_currency text;
+  c public.pay_components;
+  v_draft public.pay_components;
+  v_items jsonb := '[]'::jsonb;
+  v_amt numeric;
+  v_ex text;
+  v_applies boolean;
+  v_targets jsonb;
+begin
+  if p_business not in (select private.biz_all('payroll', 'view')) or not private.can_emp('compensation', 'view', p_business, p_employee) then
+    raise exception 'You don''t have permission to see this person''s pay' using errcode = '42501';
+  end if;
+  if not exists (select 1 from public.employees where id = p_employee and business_id = p_business) then
+    raise exception 'Choose a person' using errcode = '22023';
+  end if;
+  select currency into v_currency from public.businesses where id = p_business;
+  v_vars := private.pay_vars(p_business, p_employee, v_start, v_end);
+
+  if p_draft is not null then
+    select * into v_draft from public.pay_components where id = (p_draft ->> 'id')::uuid and business_id = p_business;
+    v_draft := jsonb_populate_record(coalesce(v_draft, null::public.pay_components), (p_draft - 'targets') || jsonb_build_object('business_id', p_business));
+    v_draft.is_active := true;
+    perform private.pay_item_check(v_draft);
+  end if;
+
+  for c in select * from public.pay_components pc where pc.business_id = p_business and pc.is_active
+            and (v_draft.id is null or pc.id <> v_draft.id)
+           union all select v_draft.* where p_draft is not null
+           order by kind desc, sort, name loop
+    v_targets := case when p_draft is not null and c.id is not distinct from v_draft.id then p_draft -> 'targets' end;
+    v_applies := private.pay_item_applies(c, p_employee, v_start, v_end, v_targets);
+    v_amt := null;
+    v_ex := null;
+    if v_applies then
+      select x.amount, x.explanation into v_amt, v_ex from private.pay_item_result(c, p_employee, v_start, v_end, v_vars, v_currency) x;
+    end if;
+    v_items := v_items || jsonb_build_object(
+      'id', c.id, 'name', c.name, 'kind', c.kind, 'draft', p_draft is not null and c.id is not distinct from v_draft.id,
+      'applies', v_applies,
+      'why_not', case when v_applies then null
+                      when exists (select 1 from public.employees x where x.id = p_employee
+                                    and ((x.join_date is not null and x.join_date > v_end) or (x.exit_date is not null and x.exit_date < v_start))) then 'Not working for you that month'
+                      when (c.effective_from is not null and c.effective_from > v_end) or (c.effective_to is not null and c.effective_to < v_start) then 'Not in effect that month'
+                      else 'Not for this person' end,
+      'amount', v_amt, 'explanation', v_ex);
+  end loop;
+  return jsonb_build_object('vars', v_vars, 'currency', v_currency, 'start', v_start, 'end', v_end, 'items', v_items);
+end $$;
+revoke all on function public.pay_items_preview(uuid, uuid, date, jsonb) from public, anon;
+grant execute on function public.pay_items_preview(uuid, uuid, date, jsonb) to authenticated;
+revoke all on function public.pay_items_preview(uuid, uuid, date, jsonb) from public, anon;
+grant execute on function public.pay_items_preview(uuid, uuid, date, jsonb) to authenticated;
+
+call private.finalize_tenant_tables();
+insert into private.schema_migrations (name) values ('20261002000003_pay_items_employment.sql') on conflict do nothing;
+
+-- ===================== 20261002000004_formula_explanations.sql =====================
+-- =====================================================================
+-- 0036 Formula explanations show the numbers they used, for example
+--   "... = MVR 1,557.69 (basic_salary MVR 13,500.00, working_days 26,
+--   unapproved_absences 3)".
+-- =====================================================================
+-- Every variable a formula uses, in the order they first appear.
+create or replace function private.pay_ast_vars(n jsonb)
+returns text[]
+language plpgsql immutable set search_path = '' as $$
+declare
+  v_out text[] := '{}';
+  v_child text;
+  i int;
+begin
+  if n is null or jsonb_typeof(n) <> 'array' then return v_out; end if;
+  if n ->> 0 = 'var' then return array[n ->> 1]; end if;
+  if n ->> 0 = 'num' then return v_out; end if;
+  for i in 1 .. jsonb_array_length(n) - 1 loop
+    foreach v_child in array private.pay_ast_vars(n -> i) loop
+      if not (v_child = any(v_out)) then v_out := v_out || v_child; end if;
+    end loop;
+  end loop;
+  return v_out;
+end $$;
+
+-- " (basic_salary MVR 13,500.00, working_days 26)"
+create or replace function private.pay_formula_values(n jsonb, v jsonb, p_currency text)
+returns text
+language sql immutable set search_path = '' as $$
+  select coalesce(' (' || string_agg(k || ' ' || case when k in ('basic_salary', 'amount') then private.pay_money((v ->> k)::numeric, p_currency)
+                                                   else private.pay_num((v ->> k)::numeric) end, ', ' order by ord) || ')', '')
+    from unnest(private.pay_ast_vars(n)) with ordinality as t(k, ord)
+$$;
+
+create or replace function private.pay_item_result(c public.pay_components, p_employee uuid, p_start date, p_end date, p_vars jsonb, p_currency text)
+returns table (amount numeric, explanation text)
+language plpgsql stable security definer set search_path = '' as $$
+declare
+  ov record;
+  v_amount numeric;
+  v_pct numeric;
+  v_basis numeric;
+  v_count numeric;
+  v_n numeric;
+  r numeric;
+  v_out numeric;
+  v_expl text;
+  v_rule jsonb;
+  v_vars jsonb;
+  v_unit text;
+  m text;
+begin
+  select o.amount, o.percent into ov from public.employee_pay_components o
+   where o.component_id = c.id and o.employee_id = p_employee and o.start_date <= p_end and (o.end_date is null or o.end_date >= p_start)
+   order by o.start_date desc limit 1;
+  v_amount := coalesce(ov.amount, c.default_amount, 0);
+  v_pct := coalesce(ov.percent, c.default_percent, 0);
+  v_vars := p_vars || jsonb_build_object('amount', v_amount);
+
+  case c.method
+    when 'fixed' then
+      r := v_amount;
+      v_expl := private.pay_money(v_amount, p_currency) || ' a month';
+    when 'per_day' then
+      r := v_amount * (p_vars ->> 'days_present')::numeric;
+      v_expl := private.pay_money(v_amount, p_currency) || ' × ' || private.pay_num((p_vars ->> 'days_present')::numeric) || ' days present = ' || private.pay_money(r, p_currency);
+    when 'prorated' then
+      if c.prorate_basis = 'working' then
+        v_basis := (p_vars ->> 'working_days')::numeric;
+        v_count := (p_vars ->> 'days_present')::numeric;
+        v_unit := ' working days';
+      else
+        -- Calendar days: every day they were employed counts, less the days they should have been at work and weren't.
+        v_basis := (p_vars ->> 'days_in_month')::numeric;
+        v_count := greatest(0, (p_vars ->> '_days_employed')::numeric - (p_vars ->> 'unapproved_absences')::numeric
+                               - (p_vars ->> 'unpaid_leave_days')::numeric - 0.5 * (p_vars ->> 'half_days')::numeric);
+        v_unit := ' days in the month';
+      end if;
+      r := case when v_basis > 0 then v_amount * v_count / v_basis else 0 end;
+      v_expl := private.pay_money(v_amount, p_currency) || ' × ' || private.pay_num(v_count) || ' of ' || private.pay_num(v_basis) || v_unit
+                || ' = ' || private.pay_money(r, p_currency);
+    when 'percent' then
+      r := (p_vars ->> 'basic_salary')::numeric * v_pct / 100;
+      v_expl := private.pay_num(v_pct) || '% of basic salary ' || private.pay_money((p_vars ->> 'basic_salary')::numeric, p_currency)
+                || ' = ' || private.pay_money(r, p_currency);
+    when 'per_occurrence' then
+      v_count := coalesce((p_vars ->> c.occurrence_var)::numeric, 0);
+      v_n := greatest(0, v_count - c.occurrence_after);
+      r := v_amount * v_n;
+      v_unit := case c.occurrence_var
+                  when 'late_count' then case when v_count = 1 then 'late' else 'lates' end
+                  when 'early_leaves' then case when v_count = 1 then 'early leave' else 'early leaves' end
+                  when 'unapproved_absences' then case when v_count = 1 then 'unapproved absence' else 'unapproved absences' end
+                  when 'half_days' then case when v_count = 1 then 'half day' else 'half days' end
+                  else replace(c.occurrence_var, '_', ' ') end;
+      v_expl := private.pay_num(v_count) || ' ' || v_unit
+                || case when v_n = 0 and c.occurrence_after > 0 then ', within the first ' || c.occurrence_after || ' that are free, so nothing is '
+                                                                     || case when c.kind = 'deduction' then 'taken off' else 'paid' end
+                        when v_n = 0 then ', so nothing is ' || case when c.kind = 'deduction' then 'taken off' else 'paid' end
+                        else case when c.occurrence_after > 0 then ', the first ' || c.occurrence_after || ' free, so ' || private.pay_num(v_n) || ' counted' else '' end
+                             || ': ' || private.pay_money(v_amount, p_currency) || ' × ' || private.pay_num(v_n) || ' = ' || private.pay_money(r, p_currency) end;
+    else
+      r := private.pay_eval(c.formula_ast, v_vars);
+      v_expl := c.formula || ' = ' || private.pay_money(r, p_currency) || private.pay_formula_values(c.formula_ast, v_vars, p_currency);
+  end case;
+  r := round(greatest(coalesce(r, 0), 0), 2);
+  v_out := r;
+
+  if c.rules_mode = 'builder' and jsonb_array_length(c.rules) > 0 then
+    v_vars := p_vars || jsonb_build_object('amount', r);
+    select x into v_rule from jsonb_array_elements(c.rules) with ordinality t(x, i)
+     where private.pay_rule_matches(x, v_vars) order by i limit 1;
+    if v_rule is null then
+      v_expl := v_expl || '. No rule matched, so it''s paid in full';
+    else
+      m := v_rule #>> '{outcome,type}';
+      v_out := case m
+        when 'percent' then r * (v_rule #>> '{outcome,value}')::numeric / 100
+        when 'nothing' then 0
+        when 'subtract' then greatest(r - (v_rule #>> '{outcome,value}')::numeric, 0)
+        when 'fixed' then (v_rule #>> '{outcome,value}')::numeric
+        else r end;
+      v_expl := v_expl || '. Rule ''' || coalesce(nullif(v_rule ->> 'label', ''), 'rule') || ''' applied: ' || case m
+        when 'percent' then private.pay_num((v_rule #>> '{outcome,value}')::numeric) || '% = ' || private.pay_money(v_out, p_currency)
+        when 'nothing' then 'nothing paid'
+        when 'subtract' then private.pay_money(r, p_currency) || ' − ' || private.pay_money((v_rule #>> '{outcome,value}')::numeric, p_currency) || ' = ' || private.pay_money(v_out, p_currency)
+        when 'fixed' then 'set to ' || private.pay_money(v_out, p_currency)
+        else 'paid in full' end;
+    end if;
+  elsif c.rules_mode = 'formula' and c.rules_ast is not null then
+    v_out := private.pay_eval(c.rules_ast, p_vars || jsonb_build_object('amount', r));
+    v_expl := v_expl || '. Rule formula ' || c.rules_formula || ' gives ' || private.pay_money(greatest(v_out, 0), p_currency)
+              || private.pay_formula_values(c.rules_ast, p_vars || jsonb_build_object('amount', r), p_currency);
+  end if;
+
+  amount := round(greatest(coalesce(v_out, 0), 0), 2);
+  explanation := v_expl;
+  return next;
+end $$;
+
+call private.finalize_tenant_tables();
+insert into private.schema_migrations (name) values ('20261002000004_formula_explanations.sql') on conflict do nothing;
+
+-- ===================== 20261003000001_payroll_runs.sql =====================
+-- =====================================================================
+-- 0037 PAYROLL RUNS, completed
+--   * A run is for a pay schedule (monthly, semi-monthly, bi-weekly or
+--     weekly) and only includes the people on that schedule. Ad-hoc runs
+--     pay one-off amounts such as bonuses and nothing else.
+--   * Monthly amounts (salary, fixed and percentage allowances) are
+--     shared out over shorter pay periods, and tax on a monthly table is
+--     worked out on the monthly equivalent.
+--   * Steps: calculate (as often as needed) → approve → finalize (locks,
+--     publishes payslips) → paid. Approving can be undone before
+--     finalizing. Only the owner can reverse a finalized run, with a reason.
+--   * Adjustments by hand need a reason and are kept in the history.
+--   * More things to check on each person: no time records, missing
+--     clock-outs, requests still waiting, and big changes from last month.
+-- =====================================================================
+
+alter table public.payroll_runs
+  add column if not exists run_type text not null default 'regular' check (run_type in ('regular', 'adhoc')),
+  add column if not exists approved_at timestamptz,
+  add column if not exists approved_by uuid references auth.users (id) on delete set null,
+  add column if not exists payslips_emailed_at timestamptz;
+create index if not exists payroll_runs_approved_by_fk_idx on public.payroll_runs (approved_by);
+alter table public.payroll_runs drop constraint if exists payroll_runs_status_check;
+alter table public.payroll_runs add constraint payroll_runs_status_check
+  check (status in ('draft', 'calculated', 'approved', 'finalized', 'paid', 'reversed'));
+
+-- How much of a monthly amount one pay period gets.
+create or replace function private.pay_period_factor(p_frequency text)
+returns numeric
+language sql immutable as $$
+  select case p_frequency when 'semi_monthly' then 0.5 when 'biweekly' then 12.0 / 26 when 'weekly' then 12.0 / 52 else 1 end
+$$;
+
+-- ---------------------------------------------------------------------
+-- Creating runs
+-- ---------------------------------------------------------------------
+drop function if exists public.create_payroll_run(uuid, date, date, date, text);
+create function public.create_payroll_run(
+  p_business uuid, p_start date, p_end date, p_pay_date date, p_name text default null,
+  p_schedule uuid default null, p_type text default 'regular')
+returns uuid
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_id uuid;
+  v_sched public.pay_schedules;
+begin
+  if p_business not in (select private.biz_all('payroll', 'create')) then
+    raise exception 'You don''t have permission to run payroll' using errcode = '42501';
+  end if;
+  if p_type not in ('regular', 'adhoc') then
+    raise exception 'Choose a regular or an ad-hoc run' using errcode = '22023';
+  end if;
+  if p_end < p_start or p_end - p_start > 62 then
+    raise exception 'Choose a pay period of up to two months' using errcode = '22023';
+  end if;
+  if p_schedule is not null then
+    select * into v_sched from public.pay_schedules where id = p_schedule and business_id = p_business and is_active;
+    if v_sched.id is null then raise exception 'Choose a pay schedule' using errcode = '22023'; end if;
+  else
+    select * into v_sched from public.pay_schedules where business_id = p_business and is_default;
+  end if;
+  if p_type = 'regular' and exists (
+      select 1 from public.payroll_runs where business_id = p_business and status <> 'reversed' and run_type = 'regular'
+         and pay_schedule_id is not distinct from v_sched.id and period_start <= p_end and period_end >= p_start) then
+    raise exception 'There''s already a pay run for some of those dates on this pay schedule' using errcode = '22023';
+  end if;
+  insert into public.payroll_runs (business_id, pay_schedule_id, name, period_start, period_end, pay_date, run_type)
+  values (p_business, v_sched.id,
+          coalesce(nullif(trim(p_name), ''),
+                   case when p_type = 'adhoc' then 'Bonus ' || to_char(p_pay_date, 'FMMonth YYYY')
+                        when coalesce(v_sched.frequency, 'monthly') = 'monthly' then to_char(p_start, 'FMMonth YYYY') || ' payroll'
+                        else to_char(p_start, 'DD Mon') || ' to ' || to_char(p_end, 'DD Mon YYYY') || ' payroll' end),
+          p_start, p_end, p_pay_date, p_type)
+  returning id into v_id;
+  return v_id;
+end $$;
+revoke all on function public.create_payroll_run(uuid, date, date, date, text, uuid, text) from public, anon;
+grant execute on function public.create_payroll_run(uuid, date, date, date, text, uuid, text) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- Calculating
+-- ---------------------------------------------------------------------
+create or replace function public.calculate_payroll_run(p_run uuid)
+returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare
+  r public.payroll_runs;
+  b public.businesses;
+  e public.employees;
+  p public.attendance_policies;
+  pen public.pension_schemes;
+  tax public.tax_tables;
+  v_sched public.pay_schedules;
+  comp record;
+  pc public.pay_components;
+  cl record;
+  ln record;
+  ar record;
+  res record;
+  v_vars jsonb;
+  v_re uuid;
+  v_days int;
+  v_workdays int;
+  v_from date;
+  v_to date;
+  v_employed int;
+  v_unpaid numeric;
+  v_paid_days numeric;
+  v_present numeric;
+  v_worked_h numeric;
+  v_ot_h numeric;
+  v_basic numeric;
+  v_salary numeric;
+  v_hourly numeric;
+  v_amount numeric;
+  v_rate numeric;
+  v_gross numeric;
+  v_taxable numeric;
+  v_pensionable numeric;
+  v_ded numeric;
+  v_employer numeric;
+  v_pen_emp numeric;
+  v_tax numeric;
+  v_exc jsonb;
+  v_has_att boolean;
+  v_has_claims boolean;
+  v_bank record;
+  v_holiday boolean;
+  v_n int := 0;
+  v_ot_cap int;
+  v_ot_used int;
+  v_ot_take int;
+  v_factor numeric;
+  v_adhoc boolean;
+  v_expl text;
+  v_count int;
+  v_prev numeric;
+  d date;
+begin
+  select * into r from public.payroll_runs where id = p_run for update;
+  if not found or r.business_id not in (select private.biz_all('payroll', 'edit')) then
+    raise exception 'You don''t have permission to calculate this pay run' using errcode = '42501';
+  end if;
+  if r.status not in ('draft', 'calculated') then
+    raise exception 'This pay run is locked (approved or finalized). Undo the approval to change it.' using errcode = '42501';
+  end if;
+  select * into b from public.businesses where id = r.business_id;
+  select * into v_sched from public.pay_schedules where id = r.pay_schedule_id;
+  v_adhoc := r.run_type = 'adhoc';
+  v_factor := case when v_adhoc then 1 else private.pay_period_factor(coalesce(v_sched.frequency, 'monthly')) end;
+  v_has_att := exists (select 1 from public.business_modules where business_id = r.business_id and module_key = 'attendance' and enabled);
+  v_has_claims := exists (select 1 from public.business_modules where business_id = r.business_id and module_key = 'claims' and enabled);
+  select * into pen from public.pension_schemes where business_id = r.business_id and is_active and effective_from <= r.period_end order by effective_from desc limit 1;
+  select * into tax from public.tax_tables where business_id = r.business_id and is_active and effective_from <= r.period_end order by effective_from desc limit 1;
+
+  -- Start again: forget the previous calculation (people kept on hold stay on hold, amounts added by hand stay).
+  create temp table if not exists _held (employee_id uuid) on commit drop;
+  delete from _held where true;
+  insert into _held select employee_id from public.payroll_run_employees where run_id = r.id and status in ('excluded', 'on_hold');
+  create temp table if not exists _manual (employee_id uuid, code text, name text, kind text, amount numeric, is_taxable boolean, is_pensionable boolean, explanation text) on commit drop;
+  delete from _manual where true;
+  insert into _manual select employee_id, code, name, kind, amount, is_taxable, is_pensionable, explanation
+    from public.payroll_run_lines where run_id = r.id and source = 'manual';
+  update public.claims set payroll_run_id = null where payroll_run_id = r.id and status = 'approved';
+  delete from public.payroll_run_employees where run_id = r.id;
+
+  v_days := r.period_end - r.period_start + 1;
+  v_workdays := 0;
+  d := r.period_start;
+  while d <= r.period_end loop
+    if extract(dow from d)::smallint = any(b.working_days) then v_workdays := v_workdays + 1; end if;
+    d := d + 1;
+  end loop;
+
+  for e in select * from public.employees em
+            where em.business_id = r.business_id
+              and (em.join_date is null or em.join_date <= r.period_end)
+              and (em.exit_date is null or em.exit_date >= r.period_start)
+              and not (em.status in ('resigned', 'terminated') and em.exit_date is null)
+              -- Only the people paid on this run's schedule (people without one are on the default schedule).
+              and (v_adhoc or r.pay_schedule_id is null or em.pay_schedule_id = r.pay_schedule_id
+                   or (em.pay_schedule_id is null and coalesce(v_sched.is_default, false)))
+            order by em.first_name, em.last_name loop
+    v_exc := '[]'::jsonb;
+    v_from := greatest(r.period_start, coalesce(e.join_date, r.period_start));
+    v_to := least(r.period_end, coalesce(e.exit_date, r.period_end));
+    v_employed := v_to - v_from + 1;
+
+    select * into comp from public.employee_compensation
+     where employee_id = e.id and effective_date <= r.period_end order by effective_date desc limit 1;
+    select ba.bank_name, ba.account_name, ba.account_number into v_bank
+      from public.employee_bank_accounts ba where ba.employee_id = e.id order by ba.is_primary desc limit 1;
+
+    v_vars := private.pay_vars(r.business_id, e.id, r.period_start, r.period_end);
+    v_unpaid := (v_vars ->> 'unpaid_leave_days')::numeric;
+    v_present := (v_vars ->> 'days_present')::numeric;
+    v_worked_h := 0;
+    v_ot_h := (v_vars ->> 'overtime_hours')::numeric;
+    if v_has_att then
+      select coalesce(sum(worked_minutes), 0) / 60.0 into v_worked_h
+        from public.attendance_records where employee_id = e.id and work_date between v_from and v_to;
+    end if;
+
+    v_basic := coalesce(comp.basic_salary, 0);
+    if v_bank.account_number is null then
+      v_exc := v_exc || jsonb_build_object('code', 'no_bank', 'message', 'No bank account on their profile', 'severity', 'warning');
+    end if;
+    if not v_adhoc then
+      if comp.basic_salary is null then
+        v_exc := v_exc || jsonb_build_object('code', 'no_salary', 'message', 'No salary on their profile', 'severity', 'error');
+      end if;
+      if v_has_att then
+        -- No time records at all in the period: every working day would be an unapproved absence.
+        if (v_vars ->> 'unapproved_absences')::numeric > 0
+           and not exists (select 1 from public.attendance_records a where a.employee_id = e.id and a.work_date between v_from and v_to and a.clock_in_at is not null) then
+          v_exc := v_exc || jsonb_build_object('code', 'no_attendance', 'severity', 'warning',
+            'message', 'No time records this period, so ' || (v_vars ->> 'unapproved_absences') || ' working days count as unapproved absences');
+        end if;
+        select count(*) into v_count from public.attendance_records a
+         where a.employee_id = e.id and a.work_date between v_from and v_to and a.clock_in_at is not null and a.clock_out_at is null;
+        if v_count > 0 then
+          v_exc := v_exc || jsonb_build_object('code', 'no_clock_out', 'severity', 'warning',
+            'message', v_count || case when v_count = 1 then ' day has' else ' days have' end || ' no clock-out');
+        end if;
+        select count(*) into v_count from public.attendance_records a
+         where a.employee_id = e.id and a.work_date between v_from and v_to and a.overtime_minutes > 0 and a.ot_decision is null
+           and coalesce((private.policy_for(r.business_id, e.id)).overtime_requires_approval, false);
+        if v_count > 0 then
+          v_exc := v_exc || jsonb_build_object('code', 'overtime_waiting', 'severity', 'warning',
+            'message', v_count || case when v_count = 1 then ' day' else ' days' end || ' of overtime still waiting for approval (not paid until approved)');
+        end if;
+      end if;
+      -- Requests still waiting that could change this pay: time off in the period, claims, time fixes.
+      select count(*) into v_count from public.approval_requests apr
+       where apr.employee_id = e.id and apr.status = 'pending'
+         and (apr.source_table <> 'leave_requests'
+              or exists (select 1 from public.leave_requests lr where lr.id = apr.source_id and lr.start_date <= v_to and lr.end_date >= v_from));
+      if v_count > 0 then
+        v_exc := v_exc || jsonb_build_object('code', 'pending_requests', 'severity', 'warning',
+          'message', v_count || case when v_count = 1 then ' request is' else ' requests are' end || ' still waiting for a decision');
+      end if;
+    end if;
+
+    -- Salary for the part of the period they were employed, less unpaid leave.
+    -- Monthly salaries are shared out over shorter pay periods.
+    if v_adhoc then
+      v_paid_days := 0;
+      v_salary := 0;
+      v_hourly := 0;
+    elsif coalesce(comp.pay_basis, 'monthly') = 'monthly' then
+      v_paid_days := greatest(0, v_employed - v_unpaid * v_days::numeric / greatest(v_workdays, 1));
+      v_salary := round(v_basic * v_factor * v_paid_days / v_days, 2);
+      v_hourly := v_basic / greatest(round(v_workdays / v_factor) * coalesce(nullif((select full_day_hours from public.attendance_policies where business_id = r.business_id and is_default), 0), 8), 1);
+    elsif comp.pay_basis = 'daily' then
+      v_paid_days := v_present;
+      v_salary := round(v_basic * v_present, 2);
+      v_hourly := v_basic / 8;
+      if not v_has_att then
+        v_exc := v_exc || jsonb_build_object('code', 'daily_no_time', 'message', 'Paid by the day, but Time & shifts is off', 'severity', 'warning');
+      end if;
+    else
+      v_paid_days := v_present;
+      v_salary := round(v_basic * v_worked_h, 2);
+      v_hourly := v_basic;
+    end if;
+
+    insert into public.payroll_run_employees (business_id, run_id, employee_id, employee_code, employee_name, department_name, position_title,
+      branch_name, bank_name, bank_account_name, bank_account_number, basic_salary, period_days, paid_days, unpaid_leave_days, absent_days,
+      worked_hours, overtime_hours, status)
+    values (r.business_id, r.id, e.id, e.employee_code, trim(e.first_name || ' ' || e.last_name),
+      (select name from public.departments where id = e.department_id), (select title from public.positions where id = e.position_id),
+      (select name from public.branches where id = e.branch_id), v_bank.bank_name, v_bank.account_name, v_bank.account_number,
+      v_basic, v_days, round(v_paid_days, 2), case when v_adhoc then 0 else v_unpaid end,
+      case when v_adhoc then 0 else (v_vars ->> 'unapproved_absences')::numeric end, round(v_worked_h, 2), round(v_ot_h, 2),
+      case when e.id in (select employee_id from _held) then 'on_hold' else 'included' end)
+    returning id into v_re;
+    v_n := v_n + 1;
+
+    if not v_adhoc then
+      -- Earnings ------------------------------------------------------
+      v_expl := null;
+      if coalesce(comp.pay_basis, 'monthly') = 'monthly' then
+        if v_factor <> 1 then
+          v_expl := private.pay_money(v_basic, b.currency) || ' a month × ' || private.pay_num(v_factor) || ' for this pay period'
+                    || case when round(v_paid_days, 2) < v_days then ' × ' || private.pay_num(v_paid_days) || ' of ' || v_days || ' days paid' else '' end;
+        elsif v_salary <> v_basic then
+          v_expl := private.pay_money(v_basic, b.currency) || ' × ' || private.pay_num(v_paid_days) || ' of ' || v_days || ' days paid'
+                    || case when v_employed < v_days then ' (employed ' || v_employed || ' days)' else '' end
+                    || case when v_unpaid > 0 then ', less ' || private.pay_num(v_unpaid) || ' working days of unpaid leave' else '' end;
+        end if;
+      elsif comp.pay_basis = 'daily' then
+        v_expl := private.pay_money(v_basic, b.currency) || ' a day × ' || private.pay_num(v_present) || ' days present';
+      else
+        v_expl := private.pay_money(v_basic, b.currency) || ' an hour × ' || private.pay_num(v_worked_h) || ' hours worked';
+      end if;
+      insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, quantity, rate, amount, is_taxable, is_pensionable, source, sort, explanation)
+      values (r.business_id, r.id, v_re, e.id, 'BASIC', 'Basic salary', 'earning', round(v_paid_days, 2), v_basic, v_salary, true, true, 'salary', 0, v_expl);
+
+      -- Allowances and deductions: every item that applies to them this period.
+      for pc in select * from public.pay_components where business_id = r.business_id and is_active order by kind desc, sort, name loop
+        continue when not private.pay_item_applies(pc, e.id, r.period_start, r.period_end);
+        select * into res from private.pay_item_result(pc, e.id, r.period_start, r.period_end, v_vars, b.currency);
+        v_amount := res.amount;
+        v_expl := res.explanation;
+        -- Monthly amounts are shared out over shorter pay periods.
+        if v_factor <> 1 and pc.method in ('fixed', 'percent', 'prorated') then
+          v_amount := round(v_amount * v_factor, 2);
+          v_expl := v_expl || '. × ' || private.pay_num(v_factor) || ' for this pay period = ' || private.pay_money(v_amount, b.currency);
+        end if;
+        continue when coalesce(v_amount, 0) = 0;
+        insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, component_id, code, name, kind, amount, is_taxable, is_pensionable, source, sort, explanation)
+        values (r.business_id, r.id, v_re, e.id, pc.id, pc.code, pc.name, pc.kind, v_amount,
+                pc.kind = 'earning' and pc.is_taxable, pc.kind = 'earning' and pc.is_pensionable, 'component',
+                case when pc.kind = 'earning' then 10 else 75 end + least(pc.sort, 900) / 100, v_expl);
+      end loop;
+
+      -- Overtime from time records, at the rate for the kind of day.
+      if v_has_att then
+        p := private.policy_for(r.business_id, e.id);
+        v_ot_cap := coalesce((p.overtime_monthly_cap_hours * 60)::int, 2147483647);
+        v_ot_used := 0;
+        for ar in select work_date, overtime_minutes, overtime_type from public.attendance_records
+                   where employee_id = e.id and work_date between v_from and v_to and overtime_minutes > 0
+                     and (ot_decision = 'approved' or not coalesce(p.overtime_requires_approval, false))
+                   order by work_date loop
+          v_ot_take := least(ar.overtime_minutes, greatest(0, v_ot_cap - v_ot_used));
+          v_ot_used := v_ot_used + v_ot_take;
+          continue when v_ot_take = 0;
+          v_holiday := exists (select 1 from public.public_holidays h where h.business_id = r.business_id and h.holiday_date = ar.work_date and not h.is_optional);
+          v_rate := case ar.overtime_type
+                      when 'holiday' then coalesce(p.overtime_rate_holiday, 1.5)
+                      when 'rest_day' then coalesce(p.overtime_rate_rest_day, 1.5)
+                      when 'normal' then coalesce(p.overtime_rate_weekday, 1.25)
+                      else case when v_holiday then coalesce(p.overtime_rate_holiday, 1.5)
+                         when not (extract(dow from ar.work_date)::smallint = any(b.working_days)) then coalesce(p.overtime_rate_rest_day, 1.5)
+                         else coalesce(p.overtime_rate_weekday, 1.25) end end;
+          insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, quantity, rate, amount, is_taxable, is_pensionable, source, sort, explanation)
+          values (r.business_id, r.id, v_re, e.id, 'OT', 'Overtime ' || to_char(ar.work_date, 'DD Mon') || ' (x' || trim(to_char(v_rate, 'FM0.00')) || ')', 'earning',
+                  round(v_ot_take / 60.0, 2), round(v_hourly * v_rate, 4), round(v_ot_take / 60.0 * v_hourly * v_rate, 2), true, false, 'overtime', 50,
+                  private.pay_num(round(v_ot_take / 60.0, 2)) || ' hours × ' || private.pay_money(v_hourly, b.currency) || ' an hour × ' || trim(to_char(v_rate, 'FM0.00'))
+                  || case ar.overtime_type when 'holiday' then ' (public holiday)' when 'rest_day' then ' (rest day)' else ' (normal day)' end);
+        end loop;
+      end if;
+
+      -- Approved claims paid through payroll, up to this period (claims stay separate from allowances).
+      if v_has_claims then
+        for cl in select c.id, c.amount, t.name, c.claim_date from public.claims c join public.claim_types t on t.id = c.claim_type_id
+                   where c.employee_id = e.id and c.status = 'approved' and c.payout_method = 'payroll' and c.payroll_run_id is null
+                     and coalesce(c.target_period_start, c.claim_date) <= r.period_end loop
+          insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, amount, is_taxable, is_pensionable, source, source_id, sort, explanation)
+          values (r.business_id, r.id, v_re, e.id, 'CLAIM', cl.name || ' claim ' || to_char(cl.claim_date, 'DD Mon'), 'earning', cl.amount, false, false, 'expense_claim', cl.id, 60,
+                  'Approved claim, paid back with pay (not taxed)');
+          update public.claims set payroll_run_id = r.id where id = cl.id;
+        end loop;
+      end if;
+    end if;
+
+    -- Amounts added by hand on this run (with their reasons) are kept when recalculating.
+    insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, amount, is_taxable, is_pensionable, source, sort, explanation)
+    select r.business_id, r.id, v_re, e.id, m.code, m.name, m.kind, m.amount, m.is_taxable, m.is_pensionable, 'manual', 70, m.explanation
+      from _manual m where m.employee_id = e.id;
+
+    select coalesce(sum(amount) filter (where kind = 'earning'), 0),
+           coalesce(sum(amount) filter (where kind = 'earning' and is_taxable), 0),
+           coalesce(sum(amount) filter (where kind = 'earning' and is_pensionable), 0)
+      into v_gross, v_taxable, v_pensionable
+      from public.payroll_run_lines where run_employee_id = v_re;
+
+    -- Deductions ------------------------------------------------------
+    if not v_adhoc then
+      for ln in select id, installment_amount, outstanding, kind from public.loans
+                 where employee_id = e.id and status = 'active' and start_date <= r.period_end and outstanding > 0 loop
+        insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, amount, source, source_id, sort, explanation)
+        values (r.business_id, r.id, v_re, e.id, upper(ln.kind), case when ln.kind = 'advance' then 'Salary advance' else 'Loan repayment' end, 'deduction',
+                least(ln.installment_amount, ln.outstanding), 'loan', ln.id, 80,
+                'Instalment ' || private.pay_money(ln.installment_amount, b.currency) || ', ' || private.pay_money(ln.outstanding, b.currency) || ' still owed before this');
+      end loop;
+    end if;
+
+    v_pen_emp := 0; v_employer := 0;
+    if pen.id is not null and (pen.applies_to = 'all' or (pen.applies_to = 'locals') = private.is_local(e, b.country)) then
+      v_amount := case pen.wage_base when 'basic' then v_salary when 'gross' then v_gross else v_pensionable end;
+      if pen.wage_ceiling is not null then v_amount := least(v_amount, round(pen.wage_ceiling * v_factor, 2)); end if;
+      v_pen_emp := round(v_amount * pen.employee_rate / 100, 2);
+      v_employer := round(v_amount * pen.employer_rate / 100, 2);
+      if v_pen_emp > 0 then
+        insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, rate, amount, source, sort, explanation)
+        values (r.business_id, r.id, v_re, e.id, 'PENSION', 'Pension (' || trim(to_char(pen.employee_rate, 'FM990.###')) || '%)', 'deduction', pen.employee_rate, v_pen_emp, 'statutory', 90,
+                trim(to_char(pen.employee_rate, 'FM990.###')) || '% of ' || private.pay_money(v_amount, b.currency) || ' '
+                || case pen.wage_base when 'basic' then 'basic salary' when 'gross' then 'total earnings' else 'pensionable pay' end);
+      end if;
+      if v_employer > 0 then
+        insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, rate, amount, source, sort, explanation)
+        values (r.business_id, r.id, v_re, e.id, 'PENSION_ER', 'Employer pension (' || trim(to_char(pen.employer_rate, 'FM990.###')) || '%)', 'employer_contribution', pen.employer_rate, v_employer, 'statutory', 95,
+                trim(to_char(pen.employer_rate, 'FM990.###')) || '% of ' || private.pay_money(v_amount, b.currency) || ', paid by the company on top');
+      end if;
+    end if;
+
+    v_tax := 0;
+    if tax.id is not null and (tax.applies_to = 'all' or (tax.applies_to = 'locals') = private.is_local(e, b.country)) then
+      v_amount := greatest(v_taxable - v_pen_emp, 0);
+      -- Worked out on the monthly (or yearly) equivalent, then shared back to this pay period.
+      v_tax := case when tax.basis = 'annual' then round(private.tax_for(tax.id, v_amount / v_factor * 12) / 12 * v_factor, 2)
+                    else round(private.tax_for(tax.id, v_amount / v_factor) * v_factor, 2) end;
+      if v_tax > 0 then
+        insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, amount, source, sort, explanation)
+        values (r.business_id, r.id, v_re, e.id, 'TAX', 'Income tax', 'deduction', v_tax, 'statutory', 91,
+                'On taxable pay of ' || private.pay_money(v_amount, b.currency) || ' after pension, using ' || tax.name
+                || case when v_factor <> 1 then ' (worked out on the monthly equivalent)' else '' end);
+      end if;
+    end if;
+
+    select coalesce(sum(amount), 0) into v_ded from public.payroll_run_lines where run_employee_id = v_re and kind = 'deduction';
+    if v_gross - v_ded < 0 then
+      v_exc := v_exc || jsonb_build_object('code', 'negative', 'message', 'Deductions are more than pay', 'severity', 'error');
+    end if;
+    -- A big change from their last regular pay.
+    if not v_adhoc then
+      select pe.net_pay into v_prev from public.payroll_run_employees pe join public.payroll_runs pr on pr.id = pe.run_id
+       where pe.employee_id = e.id and pr.business_id = r.business_id and pr.run_type = 'regular' and pr.status in ('finalized', 'paid')
+         and pr.period_end < r.period_start and pr.pay_schedule_id is not distinct from r.pay_schedule_id
+       order by pr.period_end desc limit 1;
+      if v_prev is not null and v_prev > 0 and abs((v_gross - v_ded) - v_prev) / v_prev > 0.2 then
+        v_exc := v_exc || jsonb_build_object('code', 'big_change', 'severity', 'warning',
+          'message', 'Net pay is ' || round(abs((v_gross - v_ded) - v_prev) / v_prev * 100) || '% ' || case when v_gross - v_ded > v_prev then 'higher' else 'lower' end
+                     || ' than last time (' || private.pay_money(v_prev, b.currency) || ' → ' || private.pay_money(v_gross - v_ded, b.currency) || ')');
+      end if;
+      v_prev := null;
+    end if;
+    update public.payroll_run_employees set
+      gross_pay = v_gross, taxable_pay = greatest(v_taxable - v_pen_emp, 0), pensionable_pay = v_pensionable,
+      total_deductions = v_ded, net_pay = v_gross - v_ded, employer_contributions = v_employer, exceptions = v_exc
+    where id = v_re;
+  end loop;
+
+  update public.payroll_runs set
+    status = 'calculated', calculated_at = now(), calculated_by = auth.uid(),
+    employee_count = (select count(*) from public.payroll_run_employees where run_id = r.id and status = 'included' and (not v_adhoc or gross_pay <> 0)),
+    total_gross = (select coalesce(sum(gross_pay), 0) from public.payroll_run_employees where run_id = r.id and status = 'included'),
+    total_deductions = (select coalesce(sum(total_deductions), 0) from public.payroll_run_employees where run_id = r.id and status = 'included'),
+    total_net = (select coalesce(sum(net_pay), 0) from public.payroll_run_employees where run_id = r.id and status = 'included'),
+    total_employer_contributions = (select coalesce(sum(employer_contributions), 0) from public.payroll_run_employees where run_id = r.id and status = 'included')
+  where id = r.id;
+  update public.claims c set payroll_run_id = null
+   where c.payroll_run_id = r.id and c.employee_id in (select employee_id from _held);
+  return jsonb_build_object('people', v_n);
+end $$;
+
+-- ---------------------------------------------------------------------
+-- Adjustments by hand: need a reason, kept in the history
+-- ---------------------------------------------------------------------
+drop function if exists public.add_payroll_adjustment(uuid, uuid, text, text, numeric, boolean, boolean);
+create function public.add_payroll_adjustment(
+  p_run uuid, p_employee uuid, p_name text, p_kind text, p_amount numeric, p_taxable boolean default true, p_pensionable boolean default false,
+  p_reason text default null)
+returns void
+language plpgsql security definer set search_path = '' as $$
+declare
+  r public.payroll_runs;
+  v_re uuid;
+  v_id uuid;
+begin
+  select * into r from public.payroll_runs where id = p_run;
+  if not found or r.business_id not in (select private.biz_all('payroll', 'edit')) then
+    raise exception 'You don''t have permission to change this pay run' using errcode = '42501';
+  end if;
+  if r.status not in ('draft', 'calculated') then
+    raise exception 'This pay run is locked (approved or finalized). Undo the approval to change it.' using errcode = '42501';
+  end if;
+  if p_kind not in ('earning', 'deduction') or coalesce(p_amount, 0) <= 0 or coalesce(trim(p_name), '') = '' then
+    raise exception 'Enter a name and an amount above zero' using errcode = '22023';
+  end if;
+  if coalesce(trim(p_reason), '') = '' then
+    raise exception 'Add the reason. It''s kept in the history.' using errcode = '22023';
+  end if;
+  select id into v_re from public.payroll_run_employees where run_id = p_run and employee_id = p_employee;
+  if v_re is null then
+    raise exception 'That person isn''t on this pay run' using errcode = '22023';
+  end if;
+  insert into public.payroll_run_lines (business_id, run_id, run_employee_id, employee_id, code, name, kind, amount, is_taxable, is_pensionable, source, sort, explanation)
+  values (r.business_id, p_run, v_re, p_employee, 'ADJ', trim(left(p_name, 80)), p_kind, round(p_amount, 2),
+          p_kind = 'earning' and coalesce(p_taxable, true), p_kind = 'earning' and coalesce(p_pensionable, false), 'manual', 70,
+          'Added by hand: ' || trim(left(p_reason, 300)))
+  returning id into v_id;
+  insert into public.audit_log (business_id, actor_id, action, entity_type, entity_id, resource, subject_employee_id, changes)
+  values (r.business_id, auth.uid(), 'adjust', 'payroll_run_lines', v_id, 'payroll', p_employee,
+          jsonb_build_object('run', jsonb_build_object('to', r.name), 'name', jsonb_build_object('to', trim(p_name)), 'kind', jsonb_build_object('to', p_kind),
+                             'amount', jsonb_build_object('to', round(p_amount, 2)), 'reason', jsonb_build_object('to', trim(p_reason))));
+  perform public.calculate_payroll_run(p_run);
+end $$;
+revoke all on function public.add_payroll_adjustment(uuid, uuid, text, text, numeric, boolean, boolean, text) from public, anon;
+grant execute on function public.add_payroll_adjustment(uuid, uuid, text, text, numeric, boolean, boolean, text) to authenticated;
+
+create or replace function public.remove_payroll_adjustment(p_line uuid)
+returns void
+language plpgsql security definer set search_path = '' as $$
+declare l public.payroll_run_lines; r public.payroll_runs;
+begin
+  select * into l from public.payroll_run_lines where id = p_line and source = 'manual';
+  select * into r from public.payroll_runs where id = l.run_id;
+  if l.id is null or r.business_id not in (select private.biz_all('payroll', 'edit')) then
+    raise exception 'You don''t have permission to change this pay run' using errcode = '42501';
+  end if;
+  if r.status not in ('draft', 'calculated') then
+    raise exception 'This pay run is locked (approved or finalized). Undo the approval to change it.' using errcode = '42501';
+  end if;
+  delete from public.payroll_run_lines where id = l.id;
+  insert into public.audit_log (business_id, actor_id, action, entity_type, entity_id, resource, subject_employee_id, changes)
+  values (r.business_id, auth.uid(), 'remove_adjustment', 'payroll_run_lines', l.id, 'payroll', l.employee_id,
+          jsonb_build_object('run', jsonb_build_object('from', r.name), 'name', jsonb_build_object('from', l.name),
+                             'amount', jsonb_build_object('from', l.amount), 'reason', jsonb_build_object('from', l.explanation)));
+  perform public.calculate_payroll_run(r.id);
+end $$;
+
+-- ---------------------------------------------------------------------
+-- Approve, undo approval, finalize, reverse
+-- ---------------------------------------------------------------------
+create or replace function public.approve_payroll_run(p_run uuid)
+returns void
+language plpgsql security definer set search_path = '' as $$
+declare r public.payroll_runs;
+begin
+  select * into r from public.payroll_runs where id = p_run for update;
+  if not found or r.business_id not in (select private.biz_all('payroll', 'approve')) then
+    raise exception 'You need payroll approval rights to approve a pay run' using errcode = '42501';
+  end if;
+  if r.status <> 'calculated' then
+    raise exception 'Calculate the pay run before approving it' using errcode = '22023';
+  end if;
+  if exists (select 1 from public.payroll_run_employees where run_id = r.id and status = 'included'
+              and exceptions @> '[{"severity":"error"}]'::jsonb) then
+    raise exception 'Some people have problems to fix first (shown in red), or put them on hold' using errcode = '22023';
+  end if;
+  update public.payroll_runs set status = 'approved', approved_at = now(), approved_by = auth.uid() where id = r.id;
+end $$;
+
+create or replace function public.unapprove_payroll_run(p_run uuid)
+returns void
+language plpgsql security definer set search_path = '' as $$
+declare r public.payroll_runs;
+begin
+  select * into r from public.payroll_runs where id = p_run for update;
+  if not found or r.business_id not in (select private.biz_all('payroll', 'approve')) then
+    raise exception 'You need payroll approval rights to change a pay run''s approval' using errcode = '42501';
+  end if;
+  if r.status <> 'approved' then
+    raise exception 'Only an approved run that isn''t finalized can go back' using errcode = '22023';
+  end if;
+  update public.payroll_runs set status = 'calculated', approved_at = null, approved_by = null where id = r.id;
+end $$;
+
+create or replace function public.finalize_payroll_run(p_run uuid)
+returns void
+language plpgsql security definer set search_path = '' as $$
+declare
+  r public.payroll_runs;
+  l record;
+  pe record;
+begin
+  select * into r from public.payroll_runs where id = p_run for update;
+  if not found or r.business_id not in (select private.biz_all('payroll', 'approve')) then
+    raise exception 'You need payroll approval rights to finalize a pay run' using errcode = '42501';
+  end if;
+  if r.status <> 'approved' then
+    raise exception 'Approve the pay run before finalizing it' using errcode = '22023';
+  end if;
+  if exists (select 1 from public.payroll_run_employees where run_id = r.id and status = 'included'
+              and exceptions @> '[{"severity":"error"}]'::jsonb) then
+    raise exception 'Some people have problems to fix first (shown in red), or put them on hold' using errcode = '22023';
+  end if;
+  -- Held people (and, on ad-hoc runs, people with nothing to pay) come off the run.
+  delete from public.payroll_run_employees where run_id = r.id and (status <> 'included' or (r.run_type = 'adhoc' and gross_pay = 0 and total_deductions = 0));
+
+  for l in select source_id, amount from public.payroll_run_lines where run_id = r.id and source = 'loan' loop
+    insert into public.loan_repayments (business_id, loan_id, run_id, amount, paid_on, method)
+    values (r.business_id, l.source_id, r.id, l.amount, r.pay_date, 'payroll');
+    update public.loans set outstanding = greatest(outstanding - l.amount, 0),
+                            status = case when outstanding - l.amount <= 0 then 'completed' else status end
+     where id = l.source_id;
+  end loop;
+  update public.claims set status = 'paid', paid_at = now(), paid_reference = r.name
+   where payroll_run_id = r.id and status = 'approved';
+  if r.run_type = 'regular' then
+    update public.timesheets set payroll_run_id = r.id
+     where business_id = r.business_id and status = 'approved' and period_start >= r.period_start and period_end <= r.period_end;
+    update public.leave_requests set payroll_run_id = r.id
+     where business_id = r.business_id and status = 'approved' and start_date <= r.period_end and end_date >= r.period_start
+       and leave_type_id in (select id from public.leave_types where business_id = r.business_id and not is_paid);
+  end if;
+
+  update public.payroll_runs set status = 'finalized', finalized_at = now(), finalized_by = auth.uid(),
+    employee_count = (select count(*) from public.payroll_run_employees where run_id = r.id)
+   where id = r.id;
+  update public.payroll_run_employees set payslip_published_at = now() where run_id = r.id;
+  for pe in select employee_id from public.payroll_run_employees where run_id = r.id loop
+    perform private.notify(r.business_id, private.user_for_employee(r.business_id, pe.employee_id), 'payroll.payslip_ready',
+      'Your payslip for ' || r.name || ' is here', null, '/staff/pay', 'payroll');
+  end loop;
+end $$;
+
+-- Only the owner can undo a finalized run, and must say why.
+create or replace function public.reverse_payroll_run(p_run uuid, p_reason text)
+returns void
+language plpgsql security definer set search_path = '' as $$
+declare
+  r public.payroll_runs;
+  l record;
+begin
+  select * into r from public.payroll_runs where id = p_run for update;
+  if not found or not private.is_owner(r.business_id) then
+    raise exception 'Only the owner can reverse a finalized pay run' using errcode = '42501';
+  end if;
+  if r.status not in ('finalized', 'paid') then
+    raise exception 'Only a finalized or paid run can be reversed. Delete a draft instead.' using errcode = '22023';
+  end if;
+  if coalesce(trim(p_reason), '') = '' then
+    raise exception 'Add the reason for reversing' using errcode = '22023';
+  end if;
+  for l in select loan_id, amount from public.loan_repayments where run_id = r.id loop
+    update public.loans set outstanding = least(outstanding + l.amount, principal), status = 'active' where id = l.loan_id;
+  end loop;
+  delete from public.loan_repayments where run_id = r.id;
+  update public.claims set status = 'approved', paid_at = null, paid_reference = null, payroll_run_id = null where payroll_run_id = r.id;
+  update public.timesheets set payroll_run_id = null where payroll_run_id = r.id;
+  update public.leave_requests set payroll_run_id = null where payroll_run_id = r.id;
+  update public.payroll_runs set status = 'reversed', reversed_at = now(), reversed_by = auth.uid(), reversal_reason = trim(p_reason) where id = r.id;
+end $$;
+
+create or replace function public.delete_payroll_run(p_run uuid)
+returns void
+language plpgsql security definer set search_path = '' as $$
+declare r public.payroll_runs;
+begin
+  select * into r from public.payroll_runs where id = p_run;
+  if not found or r.business_id not in (select private.biz_all('payroll', 'delete')) then
+    raise exception 'You don''t have permission to delete pay runs' using errcode = '42501';
+  end if;
+  if r.status not in ('draft', 'calculated', 'approved') then
+    raise exception 'Finalized pay runs can''t be deleted; reverse them instead' using errcode = '22023';
+  end if;
+  update public.claims set payroll_run_id = null where payroll_run_id = r.id;
+  delete from public.payroll_runs where id = r.id;
+end $$;
+
+-- Recorded when payslips are emailed from the pay run.
+create or replace function public.mark_payslips_emailed(p_run uuid, p_employees uuid[])
+returns void
+language plpgsql security definer set search_path = '' as $$
+declare r public.payroll_runs;
+begin
+  select * into r from public.payroll_runs where id = p_run;
+  if not found or r.business_id not in (select private.biz_all('payroll', 'edit')) then
+    raise exception 'You don''t have permission to send payslips' using errcode = '42501';
+  end if;
+  update public.payroll_run_employees set payslip_emailed_at = now() where run_id = p_run and employee_id = any(p_employees);
+  update public.payroll_runs set payslips_emailed_at = now() where id = p_run;
+end $$;
+
+revoke all on function public.approve_payroll_run(uuid) from public, anon;
+revoke all on function public.unapprove_payroll_run(uuid) from public, anon;
+revoke all on function public.mark_payslips_emailed(uuid, uuid[]) from public, anon;
+grant execute on function public.approve_payroll_run(uuid) to authenticated;
+grant execute on function public.unapprove_payroll_run(uuid) to authenticated;
+grant execute on function public.mark_payslips_emailed(uuid, uuid[]) to authenticated;
+
+call private.finalize_tenant_tables();
+insert into private.schema_migrations (name) values ('20261003000001_payroll_runs.sql') on conflict do nothing;
+
+-- ===================== 20261003000002_payslips_emailed.sql =====================
+-- =====================================================================
+-- 0038 A finalized run can record when its payslips were emailed
+--   (nothing else about it can change).
+-- =====================================================================
+create or replace function private.guard_payroll_run_status() returns trigger
+language plpgsql as $$
+begin
+  if old.status in ('finalized','paid') then
+    if new.status = old.status then
+      if (to_jsonb(new) - array['updated_at','notes','payslips_emailed_at']) <> (to_jsonb(old) - array['updated_at','notes','payslips_emailed_at']) then
+        raise exception 'This payroll run is finalized and locked' using errcode = '42501';
+      end if;
+    elsif not (new.status = 'paid' and old.status = 'finalized') and new.status <> 'reversed' then
+      raise exception 'A finalized payroll run can only be marked paid or reversed' using errcode = '42501';
+    end if;
+  end if;
+  if old.status = 'reversed' and new is distinct from old then
+    raise exception 'A reversed payroll run cannot be changed' using errcode = '42501';
+  end if;
+  if tg_op = 'UPDATE' and new.status = 'reversed' and old.status <> 'reversed'
+     and private.is_client_context()
+     and new.business_id not in (select private.biz_all('payroll', 'approve')) then
+    raise exception 'You need payroll approval rights to reverse a run' using errcode = '42501';
+  end if;
+  return new;
+end $$;
+
+call private.finalize_tenant_tables();
+insert into private.schema_migrations (name) values ('20261003000002_payslips_emailed.sql') on conflict do nothing;

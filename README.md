@@ -121,11 +121,11 @@ Open **http://localhost:3000/setup** in your browser. Every line should have a g
 | Contact | `/contact` | nothing (messages are stored in the `contact_messages` table) |
 | Sign up / log in / forgot password | `/signup`, `/login`, `/forgot-password` | Supabase connected |
 | Setup (5 screens) | `/onboarding` → `/onboarding/company`, `/questions`, `/tools`, `/invite` | signed in |
-| Home (in the app) | `/app` | signed in, setup finished |
+| Home (in the app): Today (who is in, off, late, on shift), Celebrations, things needing attention | `/app` | signed in, setup finished |
 | Requests (inbox, your requests, stand-in) | `/app/requests` | signed in |
 | People (list, search, filters, CSV export) | `/app/people` | rights to see people |
 | Add a person | `/app/people/new` | rights to add people |
-| A person's profile (tabs: personal, job, emergency, ID, salary & bank, files, login, history) | `/app/people/<id>` | rights to see people (salary tab only with salary rights) |
+| A person's profile (tabs: Overview, Personal, Job, Pay, Time & attendance, Time off, Claims, Documents, History) | `/app/people/<id>` | rights to see people; each tab only when its tool is on and you may see it |
 | Org chart and company structure | `/app/people/org-chart` | rights to see company structure |
 | Letters & files (make a letter, requests, sent letters, templates) | `/app/letters` | rights to letters |
 | News | `/app/news` | rights to post news |
@@ -153,10 +153,21 @@ Open **http://localhost:3000/setup** in your browser. Every line should have a g
 | Time (who's in today, fix a day) | `/app/time` | rights to see time records |
 | Roster (weekly shifts, publish) | `/app/time/roster` | rights to see the roster |
 | Timesheets (add up a period, approve, download) | `/app/time/timesheets` | rights to see time records |
-| Time off (requests, balances, enter time off, new year) | `/app/time-off` | rights to see time off |
-| Time off calendar | `/app/time-off/calendar` | rights to see time off |
+| Salaries (search, change one, change several, history) | `/app/payroll/salaries` | see pay for everyone (owner, Payroll Officer) |
+| Import salaries from a file | `/app/payroll/salaries/import` | change pay for everyone |
+| Allowances & deductions (list, templates) | `/app/payroll/allowances` | payroll for everyone (owner, Payroll Officer) |
+| One allowance or deduction (rules, who gets it, own amounts, try it) | `/app/payroll/allowances/<id>` (or `new`) | payroll for everyone; changes need payroll edit |
+| Test panel for allowances & deductions | `/app/payroll/allowances/test` | payroll for everyone |
+| Time off (requests, balances, documents, enter time off, new year) | `/app/time-off` | rights to see time off |
+| Time off calendar (holidays, events, blackout dates, who's off) | `/app/time-off/calendar` | rights to see time off; adding and changing needs time off edit for everyone |
+| Public holidays | `/app/time-off/holidays` | rights to see time off; changes need time off edit for everyone |
+| Leave types and their rules | `/app/time-off/types` | time off edit for everyone |
+| Granted leave (days given to one person) | `/app/time-off/grants` | time off edit for everyone |
 | Payroll (pay runs) | `/app/payroll` | payroll rights (owner-granted) |
-| A pay run (check, adjust, finalize, reverse, downloads) | `/app/payroll/<run>` | payroll rights |
+| A pay run (review, things to check, compared with last time, adjust, approve, finalize, email payslips, downloads) | `/app/payroll/<run>` | payroll rights; reversing needs the owner |
+| Payroll reports (department, location, cost to company, year to date, pension, tax; Excel and PDF) | `/app/payroll/reports` | payroll for everyone |
+| Salaries (everyone's current basic salary) | `/app/payroll/salaries` | salary rights for a team or the whole company |
+| Allowances & deductions (add and edit the company's list) | `/app/payroll/allowances` | payroll rights (editing needs edit rights) |
 | Claims (approve, pay separately) | `/app/claims` | rights to see claims |
 | Staff app: Pay (payslips) | `/staff/pay` | Payroll switched on, login linked to a profile |
 | Staff app: Claims (send a claim with a receipt) | `/staff/claims` | Claims switched on, login linked to a profile |
@@ -198,6 +209,93 @@ Open **http://localhost:3000/setup** in your browser. Every line should have a g
 Old addresses redirect automatically (for example `/app/settings/modules` → `/app/workspace/tools`, `/portal` → `/staff`, `/features` → `/product`). The list is in `next.config.ts`.
 
 While email sending isn't set up, invitation emails are printed in the terminal where `npm run dev` is running, and setup shows a **Copy link** button so you can send invites by WhatsApp.
+
+## The menu, pictures and celebrations
+
+- **Menu (sidebar):** Home and Requests at the top, then folding sections for People, Hire, Run, Pay and Grow, with Workspace at the bottom. Everything starts open; click a section name to fold it. The section with the page you are on always stays open. Each person's choices are remembered in their browser. On a computer, the button next to the logo shrinks the menu to icons only. On phones the menu slides out from the left. Only switched-on tools and pages the person may see are listed. Your picture and name sit at the bottom of the menu, with Your account, the staff app, the home page, light or dark, and Sign out.
+- **Profile pictures:** added by people who can edit staff profiles (owners, admins, HR), for anyone in the company and for themselves; staff can't add or change pictures. The picture is cropped to a square and made small in the browser before it's saved. Pictures are kept in the `avatars` storage bucket under random file names, so anyone with the exact link can see a picture, like most apps. Everywhere else shows initials when there's no picture.
+- **Celebrations:** on Home in the office view and the staff app, for everyone. Birthdays this week (day and month only, never the year), work anniversaries, people who joined in the last two weeks, public holidays and company news. Staff can hide their birthday on their Me page (or Your account). Turn the card off for the whole company in Workspace, Company settings.
+
+---
+
+## Payroll (Pay, Payroll)
+
+**Pay runs.** A regular run is for a pay period on one **pay schedule** (monthly, twice a month, every two weeks or weekly; set in Pay settings) and includes only the people on that schedule (people with no schedule are on the default one). An **ad-hoc run** pays only amounts added by hand, such as a bonus: no salary, allowances, overtime, claims or loans; pension and tax are worked out on what's added, if it counts for them. Monthly amounts (salary, fixed and percentage allowances) are shared out over shorter periods (for example × 0.5 twice a month), and tax on a monthly table is worked out on the monthly equivalent.
+
+**What a run works out:** basic salary (prorated for people who join or leave during the period, less unpaid leave), every allowance and deduction with its rules, overtime at the rate for the kind of day, approved claims, loan and advance instalments, pension (staff and employer shares, rates in Pay settings) and income tax (bands in Pay settings, never in the code). Every line keeps a plain explanation.
+
+**Steps:** calculate (as often as you like) → **approve** → **finalize** (locked; payslips appear in the staff app; loans and claims are updated) → mark as paid. Approving can be undone until you finalize. Only the **owner** can reverse a finalized run, with a reason. Amounts added by hand need a reason and are kept in the history (Activity log).
+
+**Review screen:** one row per person with days, earnings, deductions and net pay; open a row to see every line and its explanation. **Things to check** lists: no salary or pay below zero (these stop the run until fixed or the person is put on hold), no bank details, no time records, missing clock-outs, overtime waiting for approval, requests still waiting, and net pay more than 20% different from the last regular run. **Compared with last time** shows the totals and each person against the last finalized run on the same schedule, biggest changes first.
+
+**Outputs:** payslip PDFs with every line and its explanation, year-to-date totals and the company logo, in the staff app and emailed in bulk (**Email payslips**, attached as PDF; sent to the work email, else the personal email, else the sign-in email; without RESEND_API_KEY on your own computer they're printed in the terminal instead). Downloads on each run: bank transfer file, pay summary, payroll journal for the accountant (debits equal credits), pension report and tax report (both remind you to check the current rates). **Payroll reports** (by department, by location, cost to company, year to date, pension, tax) come from finalized and paid runs and download for Excel or as PDF.
+
+---
+
+## Salaries, allowances and deductions (Pay)
+
+Both pages are for the **owner and the Payroll Officer** by default (Salaries needs "see pay for everyone"; Allowances & deductions needs payroll for everyone). They define everything payroll calculates.
+
+**Salaries** (Pay, Salaries): everyone's basic salary, how it's paid (monthly, daily or hourly), pay schedule and the date it started, with search and filters (department, location, pay schedule, with or without a salary). A change starts on its own date and every earlier salary is kept (`employee_compensation`); an upcoming change shows under the current one. **Change several** raises a group by a percentage, adds an amount or sets one salary, from a date, and shows every change before saving. **Import from a file** takes a CSV or Excel file (staff number, salary, start date, optionally how it's paid and a reason) and checks every row before anything is saved.
+
+**Allowances & deductions** (Pay, Allowances & deductions): pay items, with new, edit, duplicate and archive. A deduction works exactly like an allowance, but is taken off pay. Each item has:
+
+- a name, type, taxable, counts toward pension, and optional dates it's in effect between;
+- who gets it: all staff, or chosen departments, job titles, locations or people, plus people with their **own amount**;
+- how it's worked out: a fixed amount per month; per day attended (rate × days present); prorated by attendance (amount × days present ÷ working days, or by calendar days); a percentage of basic salary; per occurrence (for example MVR 50 per late, only after the 3rd); or a custom formula;
+- optional **rules**, checked from the top, first match wins: pay in full, pay a percentage, pay nothing, take off an amount, or pay a set amount. The builder combines conditions with and/or and warns when a rule can never be reached. There's also a rule formula, such as `IF(unapproved_absences >= 3, amount * 0.5, amount)`.
+
+**Variables** for rules and formulas: basic_salary, amount, days_in_month, working_days, days_present (a half day counts as half), unapproved_absences, approved_absences, half_days, late_count, early_leaves, consecutive_unapproved_absences, overtime_hours, unpaid_leave_days, years_of_service. They come from the attendance register for the pay period.
+
+**Formulas are never run as code.** They're read into a small checked tree (`src/lib/payroll/formula.ts`) that only knows numbers, those variables, + − * /, comparisons and IF, AND, OR, MIN, MAX and ROUND. The database calculates the tree (`private.pay_eval`) and refuses anything else, and formulas are checked again on the server before saving. Dividing by zero gives 0.
+
+**Test panel** (Allowances & deductions, Test panel): pick a person and a month to see every item, what it comes to and why, for example "MVR 1,000.00 × 18 of 22 working days = MVR 818.18. Rule formula … gives MVR 409.09". Each item's page also has **Try it**, which works on unsaved changes. Payroll uses exactly the same calculation, and every payroll line keeps its explanation.
+
+**Templates:** attendance allowance, service charge, food, transport (per day attended), phone, island allowance, late penalty, unapproved absence deduction and consecutive absence penalty. Amounts are examples.
+
+**Unapproved absences:** basic salary now only takes off unpaid leave. Unapproved absences (working days with no time record and no approved time off) are taken off by the **Unapproved absence deduction** item every payroll company has: a day's basic salary for each (`basic_salary / working_days × unapproved_absences`). Change it or archive it like any other item.
+
+**Rules that always hold:** editing or archiving an item never changes a finalized pay run (its lines are kept as they were). Every change to an item, who gets it, and salaries is kept in the history with who, when, and the values before and after. Staff claims (sent in by staff) stay separate in Claims; allowances are worked out automatically.
+
+---
+
+## Time off rules (Run, Time off)
+
+**Days:** each leave type gives a fixed number of days per **leave year**, all at the start of the year. Nothing builds up month by month and nothing carries over. Per type, the leave year is either the calendar year or each person's year from their join date. Balances that existed before this change were kept exactly as they were (`leave_balances.kept_as_is`). A type can also have no limit (for example unpaid leave), give only days HR hands out to a person, or be **birthday leave** (for example 1 day in the birthday month, or within some days from the birthday; people need a date of birth on their profile).
+
+**Rules per type** (Time off, Leave types): notice in minutes, hours or days, and whether it can be asked for after the day (sick leave); length of service needed first and whether it can be used during probation; who it's for (everyone, or chosen roles, job titles, departments, locations or people; staff never see types they can't use); least and most days per request, most days in a row (back-to-back requests count together); most people from one department off at once (approved and waiting both count); half days; paid or unpaid. **Blackout dates** are set on the calendar, for every type or chosen types, everywhere or one location.
+
+**Asking:** when staff choose a type, the staff app shows what's left and the rules. Every change of dates is checked against the rules, and a request that breaks one can't be sent; the reason is shown (for example "Annual leave needs 7 days' notice. For these dates, you needed to ask by 20 Sep"). The database checks the same rules again when the request is saved. Office users entering time off for someone aren't held to notice or documents.
+
+**Documents:** per type, never, always, or only for more than some days. They can be added when asking or, if the type allows, later: the deadline is a number of days after the last day off. The daily job (`/api/cron/notifications`) sends a reminder the day before the deadline to the person, their manager and HR. If there's still no document after the deadline, the time off is cancelled, its days go back into the balance, the working days become **unapproved absences** in attendance (source "system", so payroll and allowances see them) and everyone is told. HR can give more time or waive the document in Time off, Documents; both need a reason, which is kept in the history, and put the time off back.
+
+**Granted leave:** HR can give one person days of any type (except no-limit types) with a reason, a start date and an optional expiry. Those days are added to what the person can ask for until they expire.
+
+**Holidays and the calendar:** Time off, Holidays lists public holidays by year and location; add, edit or delete them, and load the Maldives list for a year (moon-based dates are estimates). Holidays are never absences. The calendar shows holidays, company events, blackout dates and who's off; people with time off edit rights add things with + on a day and click an entry to change or delete it.
+
+---
+
+## Attendance and overtime (Run, Time & shifts)
+
+Each person gets **one status per day**: Present, Late, Half day, Early leave, Absent (unapproved), On leave, Holiday or Rest day. Harbor works it out from:
+
+- **Work schedules** (Time, Work schedules): which weekdays someone works and their usual shift (the shift holds the start and end times and the break). One schedule can be the company default. The **roster** overrides a schedule for a single day, and managers can drag shifts onto days.
+- **Public holidays** (from Time off) and **rest days** are never absences.
+- **Absent** means no time record on a working day with no approved time off. Days on approved time off count as **approved absences**.
+- **Rules** (Time, Rules): grace period before someone is late, how early leaving counts as early leave, half-day hours, and overtime. Overtime starts either after a number of hours in a day (by default the length of the person's shift) or for time outside the shift, with a minimum, rounding, a monthly limit, and optional manager approval. Every hour worked on a rest day or public holiday is overtime at that day's rate. The rates start at 1.25 times (normal days) and 1.5 times (rest days and public holidays); **check these against the current Maldives rules** before paying overtime.
+- When no break was recorded, the shift's usual break is taken off days long enough to include one.
+
+**Recording time:** staff clock in and out in the staff app (with optional location and a location fence per branch). Office users can add or fix a day, and must give a reason, which is kept in the history. Staff can ask for a fix, which goes to Requests. A fingerprint or face machine's file (CSV or Excel) can be imported in Time, Import from clock machine: match the columns, see every problem, then import.
+
+**Monthly summary:** stored per person per month in the `attendance_months` table, for payroll formulas later: days in the month, working days, days present, half days, unapproved and approved absences, times late, early leaves, the longest run of unapproved absences, hours worked, and overtime by kind of day (plus overtime waiting for approval and over the monthly limit).
+
+**Locking:** once a payroll run covering a day is finalized, that day's attendance can't be changed and the month's summary is kept as it was. Reversing the run unlocks it.
+
+**Where to see it:** Time, Attendance register (everyone by day for a month), Overtime (approve or reject), Attendance reports (lateness, absences, overtime, hours; download for Excel or as PDF), and each person's profile, Time & attendance tab (their calendar, the month's numbers, overtime and fixes).
+
+Payroll pays overtime only once it's approved (when approval is switched on), at the rate for the kind of day, and up to the monthly limit. Unapproved absences come off pay through the Unapproved absence deduction item (see Salaries, allowances and deductions).
+
+---
 
 ## Design & fonts
 
