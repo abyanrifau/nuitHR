@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { appConfig } from "@/config/app.config";
-import type { BusinessAccess } from "@/lib/auth/session";
-import { createClient } from "@/lib/supabase/server";
+import { getMyPlan, type BusinessAccess } from "@/lib/auth/session";
 import { formatDate } from "@/lib/format";
 import { leaveSupport } from "@/lib/platform/actions";
 import { cn } from "@/lib/utils";
@@ -9,12 +8,6 @@ import { cn } from "@/lib/utils";
 /** Whole days from now until a date (negative once it has passed). */
 function daysUntil(iso: string) {
   return Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000);
-}
-
-interface Plan {
-  status: "trial" | "active" | "grace" | "suspended" | "cancelled";
-  plan_status: string;
-  ends_at: string | null;
 }
 
 /**
@@ -41,9 +34,7 @@ export async function PlanBanner({ active, billingHref = "/app/workspace/billing
     );
   }
 
-  const supabase = await createClient();
-  const { data } = await supabase.rpc("my_plan", { p_business: active.business_id });
-  const plan = data as Plan | null;
+  const plan = await getMyPlan(active.business_id);
   if (!plan) return null;
   const ends = plan.ends_at ? formatDate(plan.ends_at, active.date_format, active.timezone) : null;
   const contact = appConfig.brand.supportEmail;

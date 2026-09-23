@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { Camera, Coffee, MapPin } from "lucide-react";
 import { ActionForm, CheckboxField, TextareaField, TextField } from "@/components/ui/action-form";
 import { Button } from "@/components/ui/button";
-import { createClient } from "@/lib/supabase/client";
+import { getBrowserClient } from "@/lib/supabase/lazy-client";
 import { clockIn, clockOut, requestTimeFix, toggleBreak } from "@/lib/time/actions";
 import { cn } from "@/lib/utils";
 
@@ -81,7 +81,7 @@ export function ClockPanel({
         setStep("Uploading your photo…");
         const ext = file.type === "image/png" ? "png" : "jpg";
         selfiePath = `${businessId}/attendance/${employeeId}/${new Date().toISOString().slice(0, 10)}-${crypto.randomUUID()}.${ext}`;
-        const { error } = await createClient().storage.from("tenant-files").upload(selfiePath, file, { contentType: file.type || "image/jpeg" });
+        const { error } = await (await getBrowserClient()).storage.from("tenant-files").upload(selfiePath, file, { contentType: file.type || "image/jpeg" });
         if (error) {
           setStep(null);
           toast.error("The photo didn't upload. Check your connection and try again.");

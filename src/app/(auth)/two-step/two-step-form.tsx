@@ -5,7 +5,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { createClient } from "@/lib/supabase/client";
+import { getBrowserClient } from "@/lib/supabase/lazy-client";
 
 export function TwoStepForm({ next }: { next: string }) {
   const [code, setCode] = useState("");
@@ -17,7 +17,7 @@ export function TwoStepForm({ next }: { next: string }) {
     setError(null);
     if (!/^\d{6}$/.test(code)) return setError("Enter the 6 digits from your app.");
     setBusy(true);
-    const supabase = createClient();
+    const supabase = await getBrowserClient();
     const { data: factors, error: listErr } = await supabase.auth.mfa.listFactors();
     const factor = factors?.totp.find((f) => f.status === "verified");
     if (listErr || !factor) {

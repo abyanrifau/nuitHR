@@ -32,11 +32,12 @@ export default async function RosterPage(props: PageProps<"/app/time/roster">) {
     );
   }
   const supabase = await createClient();
-  const { data: b } = await supabase.from("businesses").select("week_start, working_days").eq("id", active.business_id).single();
   const today = localDay(new Date(), active.timezone);
-  const start = weekStartOf(sp.week && /^\d{4}-\d{2}-\d{2}$/.test(sp.week) ? sp.week : today, b?.week_start ?? 0);
-  const end = addDays(start, 6);
-  const days = Array.from({ length: 7 }, (_, i) => addDays(start, i));
+  const anchor = sp.week && /^\d{4}-\d{2}-\d{2}$/.test(sp.week) ? sp.week : today;
+  // The week depends on the company's first day of the week, so load the
+  // days around it that any week could cover, and keep only the week below.
+  const from = addDays(anchor, -6);
+  const to = addDays(anchor, 12);
 
   let peopleQ = supabase
     .from("employees")
@@ -46,14 +47,21 @@ export default async function RosterPage(props: PageProps<"/app/time/roster">) {
     .order("first_name")
     .limit(500);
   if (sp.department) peopleQ = peopleQ.eq("department_id", sp.department);
-  const [{ data: people }, { data: entries }, { data: shifts }, { data: departments }, { data: leave }, { data: holidays }] = await Promise.all([
+  const [{ data: b }, { data: people }, { data: allEntries }, { data: shifts }, { data: departments }, { data: allLeave }, { data: allHolidays }] = await Promise.all([
+    supabase.from("businesses").select("week_start, working_days").eq("id", active.business_id).single(),
     peopleQ,
-    supabase.from("roster_entries").select("employee_id, work_date, shift_id, is_rest_day, published").eq("business_id", active.business_id).gte("work_date", start).lte("work_date", end),
+    supabase.from("roster_entries").select("employee_id, work_date, shift_id, is_rest_day, published").eq("business_id", active.business_id).gte("work_date", from).lte("work_date", to),
     supabase.from("shifts").select("id, name, code, color, start_time, end_time").eq("business_id", active.business_id).eq("is_active", true).order("start_time"),
     supabase.from("departments").select("id, name").eq("business_id", active.business_id).eq("is_active", true).order("name"),
-    supabase.from("leave_requests").select("employee_id, start_date, end_date").eq("business_id", active.business_id).eq("status", "approved").lte("start_date", end).gte("end_date", start),
-    supabase.from("public_holidays").select("holiday_date, name").eq("business_id", active.business_id).gte("holiday_date", start).lte("holiday_date", end),
+    supabase.from("leave_requests").select("employee_id, start_date, end_date").eq("business_id", active.business_id).eq("status", "approved").lte("start_date", to).gte("end_date", from),
+    supabase.from("public_holidays").select("holiday_date, name").eq("business_id", active.business_id).gte("holiday_date", from).lte("holiday_date", to),
   ]);
+  const start = weekStartOf(anchor, b?.week_start ?? 0);
+  const end = addDays(start, 6);
+  const days = Array.from({ length: 7 }, (_, i) => addDays(start, i));
+  const entries = (allEntries ?? []).filter((e) => e.work_date >= start && e.work_date <= end);
+  const leave = (allLeave ?? []).filter((l) => l.start_date <= end && l.end_date >= start);
+  const holidays = (allHolidays ?? []).filter((h) => h.holiday_date >= start && h.holiday_date <= end);
   const canEdit = can(ctx, "roster", "edit", "team") || can(ctx, "roster", "create", "team");
   const unpublished = (entries ?? []).filter((e) => !e.published).length;
   const href = (week: string) => `/app/time/roster?week=${week}${sp.department ? `&department=${sp.department}` : ""}`;

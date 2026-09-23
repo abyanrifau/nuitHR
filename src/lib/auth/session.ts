@@ -88,17 +88,48 @@ export const getMyBusinesses = cache(async (): Promise<BusinessAccess[]> => {
  * so a guessed or stale cookie can never open someone else's business.
  */
 export const getActiveBusiness = cache(async (): Promise<BusinessAccess | null> => {
-  const businesses = await getMyBusinesses();
+  const chosen = (await cookies()).get(ACTIVE_BUSINESS_COOKIE)?.value;
+  // Without a saved choice, look up the last-used business at the same time
+  // as the memberships, rather than after them.
+  const [businesses, lastUsed] = await Promise.all([getMyBusinesses(), chosen ? null : lastBusinessId()]);
   if (businesses.length === 0) return null;
-  const cookieStore = await cookies();
-  const chosen = cookieStore.get(ACTIVE_BUSINESS_COOKIE)?.value;
   const match = businesses.find((b) => b.business_id === chosen);
   if (match) return match;
+  const last = lastUsed ?? (await lastBusinessId());
+  return businesses.find((b) => b.business_id === last) ?? businesses[0];
+});
 
-  const supabase = await createClient();
+async function lastBusinessId(): Promise<string | null> {
   const user = await getSessionUser();
-  const { data: profile } = await supabase.from("profiles").select("last_business_id").eq("id", user!.id).maybeSingle();
-  return businesses.find((b) => b.business_id === profile?.last_business_id) ?? businesses[0];
+  if (!user) return null;
+  const supabase = await createClient();
+  const { data: profile } = await supabase.from("profiles").select("last_business_id").eq("id", user.id).maybeSingle();
+  return profile?.last_business_id ?? null;
+}
+
+export interface PlanInfo {
+  status: "trial" | "active" | "grace" | "suspended" | "cancelled";
+  plan_status: string;
+  ends_at: string | null;
+}
+
+/** The company's plan state (for the plan banner). Loaded once per request. */
+export const getMyPlan = cache(async (businessId: string): Promise<PlanInfo | null> => {
+  const supabase = await createClient();
+  const { data } = await supabase.rpc("my_plan", { p_business: businessId });
+  return (data as PlanInfo | null) ?? null;
+});
+
+/** Unread notifications for the bell. Loaded once per request. */
+export const getUnreadCount = cache(async (userId: string, businessId: string): Promise<number> => {
+  const supabase = await createClient();
+  const { count } = await supabase
+    .from("notifications")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .eq("business_id", businessId)
+    .is("read_at", null);
+  return count ?? 0;
 });
 
 export function toAccessContext(b: BusinessAccess): AccessContext {

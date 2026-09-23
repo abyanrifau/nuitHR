@@ -2,7 +2,7 @@ import Link from "next/link";
 import { ChevronRight, Pin } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { InstallPrompt } from "@/components/staff/install";
-import { getStaffContext } from "@/lib/staff/context";
+import { getStaffContext, getStaffProfile } from "@/lib/staff/context";
 import { formatDateTime } from "@/lib/format";
 import { ModuleIcon } from "@/modules/icons";
 import { portalNavigation } from "@/modules/access";
@@ -13,10 +13,11 @@ function greeting(timeZone: string) {
 }
 
 export default async function StaffHome() {
-  const { active, ctx, me, supabase, user } = await getStaffContext();
+  const { active, ctx, supabase, user } = await getStaffContext();
   const extras = portalNavigation(ctx, { onlyBuilt: true }).filter((p) => !p.tab);
   const now = new Date().toISOString();
-  const [{ data: news }, { data: inbox }, { count: open }] = await Promise.all([
+  const [me, { data: news }, { data: inbox }, { count: open }] = await Promise.all([
+    getStaffProfile(),
     supabase
       .from("announcements")
       .select("id, title, body, is_pinned, published_at, branch_id, department_id")

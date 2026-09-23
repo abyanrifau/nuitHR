@@ -25,7 +25,7 @@ export default async function StaffTimeOff() {
   const { active, me, supabase } = await getStaffContext();
   if (!me) return <Alert tone="warning">Your login isn&apos;t linked to a staff profile yet. Ask HR to link it.</Alert>;
   const year = Number(localDay(new Date(), active.timezone).slice(0, 4));
-  const [{ data: balances }, { data: requests }, { data: holidays }] = await Promise.all([
+  const [{ data: balances }, { data: requests }, { data: holidays }, { data: pendingReqs }] = await Promise.all([
     supabase.rpc("my_leave_balances", { p_business: active.business_id, p_year: year }),
     supabase
       .from("leave_requests")
@@ -34,6 +34,7 @@ export default async function StaffTimeOff() {
       .order("start_date", { ascending: false })
       .limit(30),
     supabase.from("public_holidays").select("name, holiday_date").eq("business_id", active.business_id).gte("holiday_date", localDay(new Date(), active.timezone)).order("holiday_date").limit(4),
+    supabase.from("approval_requests").select("id, source_id").eq("source_table", "leave_requests").eq("status", "pending"),
   ]);
   const types = (balances ?? []) as {
     leave_type_id: string;
@@ -46,7 +47,6 @@ export default async function StaffTimeOff() {
     allow_half_day: boolean;
     requires_document: boolean;
   }[];
-  const { data: pendingReqs } = await supabase.from("approval_requests").select("id, source_id").eq("source_table", "leave_requests").eq("status", "pending");
   const reqFor = new Map((pendingReqs ?? []).map((r) => [r.source_id, r.id]));
 
   return (

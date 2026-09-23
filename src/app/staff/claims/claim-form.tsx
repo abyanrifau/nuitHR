@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import { createClient } from "@/lib/supabase/client";
+import { getBrowserClient } from "@/lib/supabase/lazy-client";
 import { submitClaim } from "@/lib/claims/actions";
 
 interface ClaimType {
@@ -46,7 +46,7 @@ export function ClaimForm({ businessId, employeeId, currency, today, types }: { 
         if (file.size > 10 * 1024 * 1024) return setError("The photo must be smaller than 10 MB.");
         const ext = file.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
         receipt = `${businessId}/claims/${employeeId}/${crypto.randomUUID()}.${ext}`;
-        const { error: up } = await createClient().storage.from("tenant-files").upload(receipt, file, { contentType: file.type || undefined });
+        const { error: up } = await (await getBrowserClient()).storage.from("tenant-files").upload(receipt, file, { contentType: file.type || undefined });
         if (up) return setError("The receipt didn't upload. Check your connection and try again.");
       }
       const r = await submitClaim({ claim_type_id: typeId, claim_date: date, amount, description, route, receipt_path: receipt });

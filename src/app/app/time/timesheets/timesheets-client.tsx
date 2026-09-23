@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useOptimistic, useState, useTransition } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Calculator, Check, Download } from "lucide-react";
@@ -64,8 +64,12 @@ interface Row {
   late: number;
 }
 
-export function TimesheetTable({ rows, canApprove, period }: { rows: Row[]; canApprove: boolean; period: { start: string; end: string } }) {
+export function TimesheetTable({ rows: loaded, canApprove, period }: { rows: Row[]; canApprove: boolean; period: { start: string; end: string } }) {
   const [pending, run] = useTransition();
+  // New statuses show straight away; if saving fails they go back.
+  const [rows, patch] = useOptimistic(loaded, (list, change: { ids: string[]; status: Row["status"] }) =>
+    list.map((r) => (change.ids.includes(r.id) ? { ...r, status: change.status } : r)),
+  );
   const router = useRouter();
   if (!rows.length) {
     return <EmptyState title="Not added up yet" description="Choose the period and select Add up this period. You can add it up again as many times as you like until it's approved." />;
@@ -73,6 +77,7 @@ export function TimesheetTable({ rows, canApprove, period }: { rows: Row[]; canA
   const open = rows.filter((r) => r.status !== "approved");
   const set = (ids: string[], status: "approved" | "draft") =>
     run(async () => {
+      patch({ ids, status });
       const r = await setTimesheetStatus(ids, status);
       if (r.error) toast.error(r.error);
       else {

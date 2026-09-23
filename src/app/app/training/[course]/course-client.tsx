@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { createClient } from "@/lib/supabase/client";
+import { getBrowserClient } from "@/lib/supabase/lazy-client";
 import {
   assignCourse,
   deleteCourse,
@@ -238,7 +238,7 @@ function LessonForm({ courseId, businessId, lesson, onDone }: { courseId: string
         if (file.type !== "application/pdf") return setError("Choose a PDF file.");
         if (file.size > 20 * 1024 * 1024) return setError("The PDF must be smaller than 20 MB.");
         filePath = `${businessId}/learning/${courseId}/${crypto.randomUUID()}.pdf`;
-        const { error: up } = await createClient().storage.from("tenant-files").upload(filePath, file, { contentType: "application/pdf" });
+        const { error: up } = await (await getBrowserClient()).storage.from("tenant-files").upload(filePath, file, { contentType: "application/pdf" });
         if (up) return setError("The PDF didn't upload. Check your connection and try again.");
       }
       const r = await saveLesson(courseId, lesson?.id ?? null, { title, kind, content, video_url: videoUrl, file_path: filePath, pass_mark: passMark });

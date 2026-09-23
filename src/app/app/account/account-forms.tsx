@@ -7,7 +7,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { createClient } from "@/lib/supabase/client";
+import { getBrowserClient } from "@/lib/supabase/lazy-client";
 import { saveMyProfile, savePreferences } from "@/lib/notifications/actions";
 
 export function NameForm({ fullName, phone }: { fullName: string; phone: string }) {
@@ -31,13 +31,13 @@ export function TwoStepPanel() {
   const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
-    const { data } = await createClient().auth.mfa.listFactors();
+    const { data } = await (await getBrowserClient()).auth.mfa.listFactors();
     setFactors((data?.totp ?? []) as Factor[]);
   };
   useEffect(() => {
     let alive = true;
-    createClient()
-      .auth.mfa.listFactors()
+    getBrowserClient()
+      .then((c) => c.auth.mfa.listFactors())
       .then(({ data }) => {
         if (alive) setFactors((data?.totp ?? []) as Factor[]);
       });
@@ -51,7 +51,7 @@ export function TwoStepPanel() {
   async function start() {
     setError(null);
     setBusy(true);
-    const supabase = createClient();
+    const supabase = await getBrowserClient();
     // Clear half-finished attempts first; the service allows only one pending setup.
     for (const f of factors ?? []) if (f.status !== "verified") await supabase.auth.mfa.unenroll({ factorId: f.id });
     const { data, error: e } = await supabase.auth.mfa.enroll({ factorType: "totp", friendlyName: `Phone ${new Date().toISOString().slice(0, 10)}` });
@@ -65,7 +65,7 @@ export function TwoStepPanel() {
     if (!enrolling) return;
     if (!/^\d{6}$/.test(code)) return setError("Enter the 6 digits from your app.");
     setBusy(true);
-    const { error: err } = await createClient().auth.mfa.challengeAndVerify({ factorId: enrolling.id, code });
+    const { error: err } = await (await getBrowserClient()).auth.mfa.challengeAndVerify({ factorId: enrolling.id, code });
     setBusy(false);
     if (err) return setError("That code didn't work. Try the newest one from your app.");
     toast.success("Two-step sign-in is on.");
@@ -77,7 +77,7 @@ export function TwoStepPanel() {
   async function turnOff() {
     if (!verified) return;
     setBusy(true);
-    const { error: err } = await createClient().auth.mfa.unenroll({ factorId: verified.id });
+    const { error: err } = await (await getBrowserClient()).auth.mfa.unenroll({ factorId: verified.id });
     setBusy(false);
     if (err) return toast.error(err.message.includes("aal2") ? "Sign out and back in with your code first, then turn it off." : err.message);
     toast.success("Two-step sign-in is off.");

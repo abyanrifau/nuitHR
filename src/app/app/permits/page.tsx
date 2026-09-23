@@ -2,12 +2,15 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Alert } from "@/components/ui/alert";
 import { EmptyState, PageHeader } from "@/components/ui/page";
+import { Pagination } from "@/components/ui/table";
 import { getActiveBusiness, toAccessContext } from "@/lib/auth/session";
 import { createClient } from "@/lib/supabase/server";
 import { localDay } from "@/lib/format";
 import { can } from "@/modules/access";
 import { cn } from "@/lib/utils";
 import { AddPermitButton, PermitsTable, type PermitRow, type PermitType } from "./permits-client";
+
+const PAGE = 50;
 
 export const metadata: Metadata = { title: "Permits & renewals" };
 
@@ -36,18 +39,19 @@ export default async function PermitsPage(props: PageProps<"/app/permits">) {
     );
   }
   const tab = TABS.find((t) => t.key === sp.tab)?.key ?? "soon";
+  const page = Math.max(1, Number(sp.page) || 1);
   const today = localDay(new Date(), active.timezone);
   const supabase = await createClient();
   let q = supabase
     .from("compliance_items")
-    .select("id, employee_id, type_id, reference_no, issued_on, expires_on, issuing_authority, details, renewal_status, notes, is_archived, employee:employees(first_name, last_name, employee_code), type:compliance_types(name)")
+    .select("id, employee_id, type_id, reference_no, issued_on, expires_on, issuing_authority, details, renewal_status, notes, is_archived, employee:employees(first_name, last_name, employee_code), type:compliance_types(name)", { count: "exact" })
     .eq("business_id", active.business_id)
     .eq("is_archived", tab === "history")
     .order("expires_on", { ascending: true, nullsFirst: false })
-    .limit(500);
+    .range((page - 1) * PAGE, page * PAGE - 1);
   if (tab === "soon") q = q.gte("expires_on", today).lte("expires_on", addDays(today, 90));
   if (tab === "overdue") q = q.lt("expires_on", today);
-  const [{ data: items }, { data: types }, { data: people }, { count: expired }] = await Promise.all([
+  const [{ data: items, count }, { data: types }, { data: people }, { count: expired }] = await Promise.all([
     q,
     supabase.from("compliance_types").select("id, name, field_schema").eq("business_id", active.business_id).eq("is_active", true).order("name"),
     supabase.from("employees").select("id, first_name, last_name, employee_code").eq("business_id", active.business_id).in("status", ["active", "probation", "on_leave", "notice"]).order("first_name").limit(3000),
@@ -99,7 +103,10 @@ export default async function PermitsPage(props: PageProps<"/app/permits">) {
         ))}
       </nav>
       {rows.length ? (
-        <PermitsTable rows={rows} types={permitTypes} people={peopleOpts} today={today} dateFormat={active.date_format} canEdit={canEdit && tab !== "history"} />
+        <>
+          <PermitsTable rows={rows} types={permitTypes} people={peopleOpts} today={today} dateFormat={active.date_format} canEdit={canEdit && tab !== "history"} />
+          <Pagination page={page} pageSize={PAGE} total={count ?? rows.length} params={sp} basePath="/app/permits" />
+        </>
       ) : (
         <EmptyState
           title={tab === "soon" ? "Nothing runs out in the next 90 days" : tab === "overdue" ? "Nothing has expired" : "Nothing here yet"}

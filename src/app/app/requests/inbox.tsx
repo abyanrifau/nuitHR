@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useOptimistic, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Check, X } from "lucide-react";
@@ -34,7 +34,9 @@ const VIA: Record<Item["via"], string | null> = {
   admin: "You can step in",
 };
 
-export function Inbox({ items }: { items: Item[] }) {
+export function Inbox({ items: loaded }: { items: Item[] }) {
+  // Decided requests disappear straight away; if saving fails they come back.
+  const [items, hide] = useOptimistic(loaded, (list, ids: string[]) => list.filter((i) => !ids.includes(i.id)));
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [declining, setDeclining] = useState<string[] | null>(null);
   const [note, setNote] = useState("");
@@ -56,6 +58,8 @@ export function Inbox({ items }: { items: Item[] }) {
 
   const decide = (ids: string[], decision: "approve" | "reject", comment?: string) =>
     start(async () => {
+      hide(ids);
+      setDeclining(null);
       const r = await decideRequests({ ids, decision, comment });
       if (r.error) toast.error(r.error);
       else {

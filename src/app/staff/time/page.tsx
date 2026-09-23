@@ -35,7 +35,7 @@ export default async function StaffTime() {
   const weekAhead = addDays(today, 7);
   const twoWeeksAgo = addDays(today, -14);
 
-  const [{ data: open }, { data: recent }, { data: roster }, { data: policies }, { data: fixes }] = await Promise.all([
+  const [{ data: open }, { data: recent }, { data: roster }, { data: policies }, { data: fixes }, { data: emp }] = await Promise.all([
     supabase
       .from("attendance_records")
       .select("id, work_date, clock_in_at, clock_out_at, breaks:attendance_breaks(started_at, ended_at)")
@@ -60,8 +60,8 @@ export default async function StaffTime() {
       .order("work_date"),
     supabase.from("attendance_policies").select("require_gps, require_selfie, allow_breaks, is_default, id").eq("business_id", active.business_id),
     supabase.from("attendance_corrections").select("id, work_date, status").eq("employee_id", me.id).eq("status", "pending"),
+    supabase.from("employees").select("attendance_policy_id").eq("id", me.id).maybeSingle(),
   ]);
-  const { data: emp } = await supabase.from("employees").select("attendance_policy_id").eq("id", me.id).maybeSingle();
   const policy = policies?.find((p) => p.id === emp?.attendance_policy_id) ?? policies?.find((p) => p.is_default);
   const current = open?.[0];
   const onBreak = Boolean(current && (current.breaks as { ended_at: string | null }[]).some((b) => !b.ended_at));

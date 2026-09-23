@@ -3,13 +3,15 @@ import Link from "next/link";
 import { Alert } from "@/components/ui/alert";
 import { buttonClasses } from "@/components/ui/button";
 import { EmptyState, PageHeader } from "@/components/ui/page";
-import { StatusDot, Table, Td, Th, Tr } from "@/components/ui/table";
+import { Pagination, StatusDot, Table, Td, Th, Tr } from "@/components/ui/table";
 import { getActiveBusiness, toAccessContext } from "@/lib/auth/session";
 import { createClient } from "@/lib/supabase/server";
 import { formatDate, localDay } from "@/lib/format";
 import { can } from "@/modules/access";
 import { cn } from "@/lib/utils";
 import { AdjustButton, CancelLeaveButton, DecideLeaveButtons, RecordLeaveButton, StartYearButton } from "./time-off-client";
+
+const PAGE = 50;
 
 export const metadata: Metadata = { title: "Time off" };
 
@@ -40,10 +42,28 @@ export default async function TimeOffPage(props: PageProps<"/app/time-off">) {
   const thisYear = Number(today.slice(0, 4));
   const year = Number(sp.year) || thisYear;
   const tab = sp.tab === "balances" ? "balances" : "requests";
+  const page = Math.max(1, Number(sp.page) || 1);
   const supabase = await createClient();
-  const [{ data: types }, { data: people }] = await Promise.all([
+  // Everything this tab needs, in one go.
+  let requestsQ = supabase
+    .from("leave_requests")
+    .select("id, start_date, end_date, days, status, reason, decision_comment, attachment_path, created_at, employee:employees(id, first_name, last_name), type:leave_types(name, color)", { count: "exact" })
+    .eq("business_id", active.business_id)
+    .order("start_date", { ascending: sp.status === "pending" })
+    .range((page - 1) * PAGE, page * PAGE - 1);
+  if (sp.status) requestsQ = requestsQ.eq("status", sp.status);
+  else requestsQ = requestsQ.gte("end_date", `${year}-01-01`).lte("start_date", `${year}-12-31`);
+  const [{ data: types }, { data: people }, requestsTab, balancesReady] = await Promise.all([
     supabase.from("leave_types").select("id, name, accrual_method").eq("business_id", active.business_id).eq("is_active", true).order("sort").order("name"),
     supabase.from("employees").select("id, first_name, last_name, employee_code").eq("business_id", active.business_id).in("status", ["active", "probation", "on_leave", "suspended"]).order("first_name").limit(3000),
+    tab === "requests"
+      ? Promise.all([
+          requestsQ,
+          supabase.rpc("my_request_inbox", { p_business: active.business_id }),
+          supabase.from("approval_requests").select("id, source_id").eq("business_id", active.business_id).eq("source_table", "leave_requests").eq("status", "pending"),
+        ])
+      : null,
+    tab === "balances" ? supabase.rpc("refresh_leave_balances", { p_business: active.business_id, p_year: year }) : null,
   ]);
   const canApprove = can(ctx, "leave", "approve", "team");
   const canEdit = can(ctx, "leave", "edit");
@@ -64,19 +84,10 @@ export default async function TimeOffPage(props: PageProps<"/app/time-off">) {
       />
     );
   } else if (tab === "requests") {
-    let q = supabase
-      .from("leave_requests")
-      .select("id, start_date, end_date, days, status, reason, decision_comment, attachment_path, created_at, employee:employees(id, first_name, last_name), type:leave_types(name, color)")
-      .eq("business_id", active.business_id)
-      .order("start_date", { ascending: sp.status === "pending" })
-      .limit(100);
-    if (sp.status) q = q.eq("status", sp.status);
-    else q = q.gte("end_date", `${year}-01-01`).lte("start_date", `${year}-12-31`);
-    const { data: rows } = await q;
-    const { data: waiting } = await supabase.rpc("my_request_inbox", { p_business: active.business_id });
+    const [{ data: rows, count }, { data: waiting }, { data: pendingReqs }] = requestsTab!;
+    // Leave requests waiting on this person's decision.
     const mine = new Set(((waiting ?? []) as { request_type: string; id: string }[]).filter((w) => w.request_type === "leave").map((w) => w.id));
-    const { data: reqs } = mine.size ? await supabase.from("approval_requests").select("id, source_id").in("id", [...mine]) : { data: [] };
-    const decidable = new Set((reqs ?? []).map((r) => r.source_id));
+    const decidable = new Set((pendingReqs ?? []).filter((r) => mine.has(r.id)).map((r) => r.source_id));
     body = (
       <>
         <div className="mb-4 flex flex-wrap gap-2 text-[13px]">
@@ -143,13 +154,16 @@ export default async function TimeOffPage(props: PageProps<"/app/time-off">) {
               })}
             </tbody>
           </Table>
+        ) : null}
+        {rows?.length ? (
+          <Pagination page={page} pageSize={PAGE} total={count ?? rows.length} params={sp} basePath="/app/time-off" />
         ) : (
           <EmptyState title="Nothing here" description="Time off that people ask for in the staff app shows here." />
         )}
       </>
     );
   } else {
-    await supabase.rpc("refresh_leave_balances", { p_business: active.business_id, p_year: year });
+    void balancesReady;
     const { data: balances } = await supabase
       .from("leave_balances")
       .select("employee_id, leave_type_id, balance, pending, taken, carried_forward, adjusted, accrued")

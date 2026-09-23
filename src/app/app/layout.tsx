@@ -11,8 +11,7 @@ import { Sidebar, type SidebarSection } from "@/components/app-shell/sidebar";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { signOut } from "@/lib/auth/actions";
-import { getActiveBusiness, getMyBusinesses, requireUser, toAccessContext } from "@/lib/auth/session";
-import { createClient } from "@/lib/supabase/server";
+import { getActiveBusiness, getMyBusinesses, getMyPlan, getUnreadCount, requireUser, toAccessContext } from "@/lib/auth/session";
 import { adminNavigation } from "@/modules/access";
 import { PlanBanner } from "@/components/app-shell/plan-banner";
 import { BusinessSwitcher } from "./business-switcher";
@@ -25,13 +24,8 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   if (active.is_owner && !active.onboarding_completed_at) redirect("/onboarding");
   // Staff use the phone app; the office view is for people who manage something.
   if (active.role_key === "employee") redirect("/staff");
-  const supabase = await createClient();
-  const { count: unread } = await supabase
-    .from("notifications")
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", user.id)
-    .eq("business_id", active.business_id)
-    .is("read_at", null);
+  // Both at once; the plan banner reads the same (cached) plan below.
+  const [unread] = await Promise.all([getUnreadCount(user.id, active.business_id), active.support ? null : getMyPlan(active.business_id)]);
 
   // Only pages that exist are shown; each build phase adds more.
   const nav = adminNavigation(toAccessContext(active), { onlyBuilt: true });

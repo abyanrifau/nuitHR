@@ -384,6 +384,24 @@ On your own computer, the same setting is in `.env.local`.
 
 ---
 
+## Speed
+
+Harbor's pages are built on Vercel's servers, and every page asks the database (Supabase) for its data. The two must be in the same place, or every page waits for data to cross the world, often more than once.
+
+- **Supabase** is in **Mumbai** (`ap-south-1`).
+- **Vercel functions** are pinned to **Mumbai** too (`"regions": ["bom1"]` in `vercel.json`).
+
+**Checking the region in Vercel:**
+1. Go to **vercel.com** → your Harbor project → **Settings** → **Functions**.
+2. Under **Function Region**, it should say **Mumbai, India (bom1)**. `vercel.json` sets this on each deploy.
+3. To see it on a live page: open harbor.nuit.works in Chrome, press **F12** → **Network**, reload, click the first row and look for `x-vercel-id` under **Response Headers**. It reads like `bom1::bom1::…`. The last place name before the code is where the page was built; it should be `bom1`, not `iad1` (Washington DC).
+
+If you ever move Supabase to another region, change `bom1` in `vercel.json` to the matching Vercel region.
+
+**Measuring speed** (for developers): `scripts/perf/` has the tools used to measure and tune Harbor. `session.mts` makes a throwaway signed-in test company (and deletes it again), `measure.mts` times the main pages, `waterfall.mts` lists each page's database calls, `js-size.mts` shows how much JavaScript each page downloads, and `db-audit.mjs` checks the database for missing indexes and slow security rules. Each file explains how to run it. Always run `session.mts teardown` afterwards.
+
+---
+
 ## Going live on harbor.nuit.works
 
 Do these in order. Each one is a few clicks. Where it says "copy", never paste keys into chats or emails.

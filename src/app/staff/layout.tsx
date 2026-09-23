@@ -7,8 +7,7 @@ import { Bell, LayoutDashboard } from "lucide-react";
 import { Wordmark } from "@/components/brand/logo";
 import { BottomTabs } from "@/components/staff/bottom-tabs";
 import { appConfig } from "@/config/app.config";
-import { getActiveBusiness, requireUser, toAccessContext } from "@/lib/auth/session";
-import { createClient } from "@/lib/supabase/server";
+import { getActiveBusiness, getMyPlan, getUnreadCount, requireUser, toAccessContext } from "@/lib/auth/session";
 import { portalTabs } from "@/modules/access";
 
 export const metadata: Metadata = {
@@ -32,13 +31,7 @@ export default async function StaffLayout({ children }: { children: ReactNode })
   const tabs = portalTabs(ctx, { onlyBuilt: true }).map(({ label, href, icon }) => ({ label, href, icon }));
   // Staff only use this app; everyone else gets a link back to the office view.
   const hasOfficeView = active.role_key !== "employee";
-  const supabase = await createClient();
-  const { count: unread } = await supabase
-    .from("notifications")
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", user.id)
-    .eq("business_id", active.business_id)
-    .is("read_at", null);
+  const [unread] = await Promise.all([getUnreadCount(user.id, active.business_id), active.support ? null : getMyPlan(active.business_id)]);
 
   return (
     <div className="min-h-dvh pb-[calc(4rem+env(safe-area-inset-bottom))]">

@@ -25,12 +25,12 @@ export default async function PayRunPage(props: PageProps<"/app/payroll/[run]">)
     );
   }
   const supabase = await createClient();
-  const { data: run } = await supabase.from("payroll_runs").select("*").eq("id", id).eq("business_id", active.business_id).maybeSingle();
-  if (!run) notFound();
-  const [{ data: people }, { data: lines }] = await Promise.all([
+  const [{ data: run }, { data: people }, { data: lines }] = await Promise.all([
+    supabase.from("payroll_runs").select("*").eq("id", id).eq("business_id", active.business_id).maybeSingle(),
     supabase.from("payroll_run_employees").select("*").eq("run_id", id).order("employee_name"),
     supabase.from("payroll_run_lines").select("id, employee_id, code, name, kind, amount, quantity, source").eq("run_id", id).order("sort"),
   ]);
+  if (!run) notFound();
   const s = RUN_STATUS[run.status];
   const locked = !["draft", "calculated"].includes(run.status);
   const errors = (people ?? []).filter((p) => p.status === "included" && (p.exceptions as { severity: string }[]).some((x) => x.severity === "error")).length;

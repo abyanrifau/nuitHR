@@ -4,12 +4,15 @@ import { Settings2 } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { buttonClasses } from "@/components/ui/button";
 import { EmptyState, PageHeader } from "@/components/ui/page";
+import { Pagination } from "@/components/ui/table";
 import { getActiveBusiness, toAccessContext } from "@/lib/auth/session";
 import { createClient } from "@/lib/supabase/server";
 import { formatDate, formatMoney } from "@/lib/format";
 import { can } from "@/modules/access";
 import { cn } from "@/lib/utils";
 import { ClaimsTable } from "./claims-client";
+
+const PAGE = 50;
 
 export const metadata: Metadata = { title: "Claims" };
 
@@ -32,25 +35,33 @@ export default async function ClaimsPage(props: PageProps<"/app/claims">) {
     );
   }
   const tab = TABS.find((t) => t.key === sp.tab)?.key ?? "pending";
+  const page = Math.max(1, Number(sp.page) || 1);
   const supabase = await createClient();
+  const status = tab === "pending" ? "pending" : tab === "to_pay" ? "approved" : tab === "paid" ? "paid" : null;
   let q = supabase
     .from("claims")
-    .select("id, claim_date, amount, currency, status, description, route, receipt_path, payout_method, is_late, payroll_run_id, paid_reference, decision_comment, employee:employees(id, first_name, last_name), type:claim_types(name)")
+    .select("id, claim_date, amount, currency, status, description, route, receipt_path, payout_method, is_late, payroll_run_id, paid_reference, decision_comment, employee:employees(id, first_name, last_name), type:claim_types(name)", { count: "exact" })
     .eq("business_id", active.business_id)
     .order("claim_date", { ascending: false })
-    .limit(200);
-  if (tab === "pending") q = q.eq("status", "pending");
-  else if (tab === "to_pay") q = q.eq("status", "approved");
-  else if (tab === "paid") q = q.eq("status", "paid");
-  const [{ data: rows }, { data: waiting }, { count: pendingCount }] = await Promise.all([
+    .range((page - 1) * PAGE, page * PAGE - 1);
+  // Just the amounts of every claim in this list, for the total.
+  let amountsQ = supabase.from("claims").select("amount").eq("business_id", active.business_id);
+  if (status) {
+    q = q.eq("status", status);
+    amountsQ = amountsQ.eq("status", status);
+  }
+  const [{ data: rows, count }, { data: amounts }, { data: waiting }, { data: pendingReqs }, { count: pendingCount }] = await Promise.all([
     q,
+    amountsQ,
     supabase.rpc("my_request_inbox", { p_business: active.business_id }),
+    supabase.from("approval_requests").select("id, source_id").eq("business_id", active.business_id).eq("source_table", "claims").eq("status", "pending"),
     supabase.from("claims").select("id", { count: "exact", head: true }).eq("business_id", active.business_id).eq("status", "pending"),
   ]);
-  const mine = ((waiting ?? []) as { id: string; request_type: string }[]).filter((w) => w.request_type === "claim").map((w) => w.id);
-  const { data: reqs } = mine.length ? await supabase.from("approval_requests").select("source_id").in("id", mine) : { data: [] };
-  const decidable = new Set((reqs ?? []).map((r) => r.source_id));
-  const total = (rows ?? []).reduce((a, r) => a + Number(r.amount), 0);
+  // Claims waiting on this person's decision.
+  const mine = new Set(((waiting ?? []) as { id: string; request_type: string }[]).filter((w) => w.request_type === "claim").map((w) => w.id));
+  const decidable = new Set((pendingReqs ?? []).filter((r) => mine.has(r.id)).map((r) => r.source_id));
+  const total = (amounts ?? []).reduce((a, r) => a + Number(r.amount), 0);
+  const shown = count ?? rows?.length ?? 0;
 
   return (
     <div>
@@ -82,7 +93,7 @@ export default async function ClaimsPage(props: PageProps<"/app/claims">) {
       {rows?.length ? (
         <>
           <p className="mb-3 text-sm text-muted-foreground tabular">
-            {rows.length} {rows.length === 1 ? "claim" : "claims"} · {formatMoney(total, active.currency)}
+            {shown} {shown === 1 ? "claim" : "claims"} · {formatMoney(total, active.currency)}
           </p>
           <ClaimsTable
             tab={tab}
@@ -107,6 +118,7 @@ export default async function ClaimsPage(props: PageProps<"/app/claims">) {
               };
             })}
           />
+          <Pagination page={page} pageSize={PAGE} total={shown} params={sp} basePath="/app/claims" />
         </>
       ) : (
         <EmptyState title={tab === "pending" ? "Nothing waiting" : "No claims here"} description="Claims staff send from the staff app show here." />

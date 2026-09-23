@@ -26,15 +26,18 @@ export default async function ReviewRoundPage(props: PageProps<"/app/reviews/[cy
     );
   }
   const supabase = await createClient();
-  const { data: c } = await supabase.from("review_cycles").select("*, template:review_templates(name)").eq("id", id).eq("business_id", active.business_id).maybeSingle();
+  const [{ data: c }, { data: reviews }, { data: allDepts }] = await Promise.all([
+    supabase.from("review_cycles").select("*, template:review_templates(name)").eq("id", id).eq("business_id", active.business_id).maybeSingle(),
+    supabase
+      .from("reviews")
+      .select("id, status, overall_rating, employee:employees!reviews_business_id_employee_id_fkey(id, first_name, last_name), reviewer:employees!reviews_business_id_reviewer_employee_id_fkey(first_name, last_name)")
+      .eq("cycle_id", id)
+      .order("created_at"),
+    supabase.from("departments").select("id, name").eq("business_id", active.business_id),
+  ]);
   if (!c) notFound();
-  const { data: reviews } = await supabase
-    .from("reviews")
-    .select("id, status, overall_rating, employee:employees!reviews_business_id_employee_id_fkey(id, first_name, last_name), reviewer:employees!reviews_business_id_reviewer_employee_id_fkey(first_name, last_name)")
-    .eq("cycle_id", id)
-    .order("created_at");
   const depts = ((c.participant_filter as { department_ids?: string[] })?.department_ids ?? []) as string[];
-  const { data: deptNames } = depts.length ? await supabase.from("departments").select("name").in("id", depts) : { data: [] };
+  const deptNames = (allDepts ?? []).filter((d) => depts.includes(d.id));
 
   return (
     <div className="max-w-5xl">

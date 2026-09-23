@@ -1,5 +1,3 @@
-"use client";
-
 import Link from "next/link";
 import { ActionForm, SelectField } from "@/components/ui/action-form";
 import { buttonClasses } from "@/components/ui/button";

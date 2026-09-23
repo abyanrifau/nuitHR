@@ -27,9 +27,10 @@ export default async function VacancyPage(props: PageProps<"/app/hiring/[vacancy
     );
   }
   const supabase = await createClient();
-  const { data: v } = await supabase.from("vacancies").select("*").eq("id", id).eq("business_id", active.business_id).maybeSingle();
-  if (!v) notFound();
-  const [{ data: apps }, { data: code }] = await Promise.all([
+  const canEdit = can(ctx, "recruitment", "edit");
+  const canHire = canEdit && can(ctx, "employees", "create");
+  const [{ data: v }, { data: apps }, { data: code }, org] = await Promise.all([
+    supabase.from("vacancies").select("*").eq("id", id).eq("business_id", active.business_id).maybeSingle(),
     supabase
       .from("applications")
       .select(
@@ -38,10 +39,9 @@ export default async function VacancyPage(props: PageProps<"/app/hiring/[vacancy
       .eq("vacancy_id", id)
       .order("applied_at", { ascending: false }),
     supabase.rpc("suggest_employee_code", { p_business: active.business_id }),
+    canHire ? loadOrgOptions(supabase, active.business_id) : null,
   ]);
-  const canEdit = can(ctx, "recruitment", "edit");
-  const canHire = canEdit && can(ctx, "employees", "create");
-  const org = canHire ? await loadOrgOptions(supabase, active.business_id) : null;
+  if (!v) notFound();
   const authorIds = [...new Set((apps ?? []).flatMap((a) => ((a.notes ?? []) as { author_id: string | null }[]).map((n) => n.author_id)).filter(Boolean))] as string[];
   const { data: authors } = authorIds.length ? await supabase.from("profiles").select("id, full_name").in("id", authorIds) : { data: [] };
   const authorName = new Map((authors ?? []).map((a) => [a.id, a.full_name ?? "Someone"]));

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useOptimistic, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Check, Plus, X } from "lucide-react";
@@ -23,15 +23,19 @@ export function DecideLeaveButtons({ id }: { id: string }) {
   const [declining, setDeclining] = useState(false);
   const [note, setNote] = useState("");
   const [pending, start] = useTransition();
+  const [decided, setDecided] = useOptimistic<"approve" | "reject" | null>(null);
   const router = useRouter();
   const go = (decision: "approve" | "reject") =>
     start(async () => {
+      setDecided(decision);
+      setDeclining(false);
       const r = await decideLeave(id, decision, decision === "reject" ? note : undefined);
       if (r.error) return void toast.error(r.error);
       toast.success(r.message ?? "Done.");
       setDeclining(false);
       router.refresh();
     });
+  if (decided) return <span className="text-[13px] text-muted-foreground">{decided === "approve" ? "Approved" : "Declined"}</span>;
   return (
     <>
       <Button variant="secondary" size="sm" disabled={pending} onClick={() => go("approve")}>

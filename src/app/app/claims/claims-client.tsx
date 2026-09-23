@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useOptimistic, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -38,7 +38,11 @@ const STATUS: Record<string, { label: string; tone: "success" | "warning" | "dan
   cancelled: { label: "Cancelled", tone: "neutral" },
 };
 
-export function ClaimsTable({ rows, tab, canPay }: { rows: Row[]; tab: string; canPay: boolean }) {
+export function ClaimsTable({ rows: loaded, tab, canPay }: { rows: Row[]; tab: string; canPay: boolean }) {
+  // New statuses show straight away; if saving fails they go back.
+  const [rows, patch] = useOptimistic(loaded, (list, change: { ids: string[]; status: string }) =>
+    list.map((r) => (change.ids.includes(r.id) ? { ...r, status: change.status, decidable: false } : r)),
+  );
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [declining, setDeclining] = useState<string | null>(null);
   const [note, setNote] = useState("");
@@ -47,8 +51,12 @@ export function ClaimsTable({ rows, tab, canPay }: { rows: Row[]; tab: string; c
   const [pending, start] = useTransition();
   const router = useRouter();
   const payable = rows.filter((r) => r.status === "approved" && !r.inRun);
-  const run = (fn: () => Promise<{ error?: string; message?: string }>, after?: () => void) =>
+  const run = (fn: () => Promise<{ error?: string; message?: string }>, after?: () => void, optimistic?: { ids: string[]; status: string }) =>
     start(async () => {
+      if (optimistic) {
+        patch(optimistic);
+        after?.();
+      }
       const r = await fn();
       if (r.error) return void toast.error(r.error);
       toast.success(r.message ?? "Done.");
@@ -146,7 +154,7 @@ export function ClaimsTable({ rows, tab, canPay }: { rows: Row[]; tab: string; c
                   )}
                   {r.status === "pending" && r.decidable && (
                     <>
-                      <Button variant="secondary" size="sm" disabled={pending} onClick={() => run(() => decideClaim(r.id, "approve"))}>
+                      <Button variant="secondary" size="sm" disabled={pending} onClick={() => run(() => decideClaim(r.id, "approve"), undefined, { ids: [r.id], status: "approved" })}>
                         <Check className="size-3.5" aria-hidden /> Approve
                       </Button>
                       <Button variant="ghost" size="sm" disabled={pending} onClick={() => setDeclining(r.id)}>
@@ -167,7 +175,7 @@ export function ClaimsTable({ rows, tab, canPay }: { rows: Row[]; tab: string; c
           <Button
             variant="danger"
             loading={pending}
-            onClick={() => (note.trim() ? run(() => decideClaim(declining!, "reject", note), () => setDeclining(null)) : toast.error("Add a short note so they know why."))}
+            onClick={() => (note.trim() ? run(() => decideClaim(declining!, "reject", note), () => setDeclining(null), { ids: [declining!], status: "rejected" }) : toast.error("Add a short note so they know why."))}
           >
             Decline
           </Button>
@@ -185,6 +193,7 @@ export function ClaimsTable({ rows, tab, canPay }: { rows: Row[]; tab: string; c
                   setPaying(false);
                   setSelected(new Set());
                 },
+                { ids: [...selected], status: "paid" },
               )
             }
           >

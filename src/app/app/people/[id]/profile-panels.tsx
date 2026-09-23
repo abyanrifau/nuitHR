@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { DetailList, EmptyState } from "@/components/ui/page";
 import { StatusDot, Table, Td, Th, Tr } from "@/components/ui/table";
-import { createClient } from "@/lib/supabase/client";
+import { getBrowserClient } from "@/lib/supabase/lazy-client";
 import {
   addCompensation,
   changeStatus,
@@ -465,7 +465,7 @@ export function DocumentsPanel({
     setBusy(true);
     const safe = file.name.replace(/[^\w.\-]+/g, "_").slice(-80);
     const path = `${businessId}/documents/${employeeId}/${crypto.randomUUID()}-${safe}`;
-    const supabase = createClient();
+    const supabase = await getBrowserClient();
     const { error: upErr } = await supabase.storage.from("tenant-files").upload(path, file, { contentType: file.type || undefined });
     if (upErr) {
       setBusy(false);

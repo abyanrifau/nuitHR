@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { createClient } from "@/lib/supabase/client";
+import { getBrowserClient } from "@/lib/supabase/lazy-client";
 import { addCandidate, addNote, candidateFileLink, hireCandidate, moveApplication, rateApplication, scheduleInterview, setInterviewStatus } from "@/lib/hiring/actions";
 import type { ActionResult } from "@/lib/errors";
 import { today } from "@/lib/format";
@@ -209,7 +209,7 @@ function AddCandidateForm({ vacancyId, businessId, onDone }: { vacancyId: string
             if (file.size > 10 * 1024 * 1024) return setError("The CV must be smaller than 10 MB.");
             const ext = file.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") || "pdf";
             cv = `${businessId}/recruitment/${crypto.randomUUID()}/cv.${ext}`;
-            const { error: up } = await createClient().storage.from("tenant-files").upload(cv, file, { contentType: file.type || undefined });
+            const { error: up } = await (await getBrowserClient()).storage.from("tenant-files").upload(cv, file, { contentType: file.type || undefined });
             if (up) return setError("The CV didn't upload. Check you can add candidates, then try again.");
           }
           const r = await addCandidate({ ...v, vacancy_id: vacancyId, cv_path: cv });

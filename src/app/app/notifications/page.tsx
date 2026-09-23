@@ -10,7 +10,7 @@ import { MarkAllRead } from "./mark-all-read";
 
 export const metadata: Metadata = { title: "Notifications" };
 
-const PAGE = 30;
+const PAGE = 50;
 
 export default async function NotificationsPage(props: PageProps<"/app/notifications">) {
   const sp = (await props.searchParams) as Record<string, string | undefined>;

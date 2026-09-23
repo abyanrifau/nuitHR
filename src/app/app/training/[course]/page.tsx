@@ -43,23 +43,28 @@ export default async function CoursePage(props: PageProps<"/app/training/[course
     );
   }
   const supabase = await createClient();
-  const { data: c } = await supabase.from("courses").select("*").eq("id", id).eq("business_id", active.business_id).maybeSingle();
+  // The course and its lessons (with each question's answer) together.
+  const [{ data: c }, lessonsRes] = await Promise.all([
+    supabase.from("courses").select("*").eq("id", id).eq("business_id", active.business_id).maybeSingle(),
+    tab === "lessons"
+      ? supabase
+          .from("course_lessons")
+          .select("id, title, kind, content, video_url, file_path, pass_mark, sort, questions:quiz_questions(id, question, kind, options, sort, key:quiz_answer_keys(correct_option_ids, explanation))")
+          .eq("course_id", id)
+          .order("sort")
+      : null,
+  ]);
   if (!c) notFound();
   const canEdit = can(ctx, "learning", "edit");
   const statusLabel = c.status === "published" ? "Live" : c.status === "draft" ? "Draft, not visible to staff yet" : "Archived";
 
   let body: React.ReactNode = null;
   if (tab === "lessons") {
-    const { data: lessons } = await supabase
-      .from("course_lessons")
-      .select("id, title, kind, content, video_url, file_path, pass_mark, sort, questions:quiz_questions(id, question, kind, options, sort)")
-      .eq("course_id", id)
-      .order("sort");
-    const questionIds = (lessons ?? []).flatMap((l) => ((l.questions ?? []) as { id: string }[]).map((q) => q.id));
-    const { data: keys } = questionIds.length
-      ? await supabase.from("quiz_answer_keys").select("question_id, correct_option_ids, explanation").in("question_id", questionIds)
-      : { data: [] };
-    const keyFor = new Map((keys ?? []).map((k) => [k.question_id, k]));
+    const lessons = lessonsRes?.data;
+    type Key = { correct_option_ids: string[]; explanation: string | null };
+    const keyFor = new Map(
+      (lessons ?? []).flatMap((l) => ((l.questions ?? []) as unknown as { id: string; key: Key | Key[] | null }[]).map((q) => [q.id, Array.isArray(q.key) ? q.key[0] : q.key] as const)),
+    );
     const rows: LessonRow[] = (lessons ?? []).map((l) => ({
       id: l.id,
       title: l.title,

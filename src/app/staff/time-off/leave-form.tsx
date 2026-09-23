@@ -10,7 +10,7 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { createClient } from "@/lib/supabase/client";
+import { getBrowserClient } from "@/lib/supabase/lazy-client";
 import { previewLeaveDays, requestLeave } from "@/lib/leave/actions";
 
 const HALVES = [
@@ -66,7 +66,7 @@ export function LeaveRequestForm({
         if (file.size > 10 * 1024 * 1024) return setError("The document must be smaller than 10 MB.");
         const safe = file.name.replace(/[^\w.\-]+/g, "_").slice(-60);
         attachment = `${businessId}/leave/${employeeId}/${crypto.randomUUID()}-${safe}`;
-        const { error: up } = await createClient().storage.from("tenant-files").upload(attachment, file, { contentType: file.type || undefined });
+        const { error: up } = await (await getBrowserClient()).storage.from("tenant-files").upload(attachment, file, { contentType: file.type || undefined });
         if (up) return setError("The document didn't upload. Check your connection and try again.");
       }
       const r = await requestLeave({

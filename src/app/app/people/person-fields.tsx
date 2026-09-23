@@ -1,5 +1,3 @@
-"use client";
-
 import { CheckboxField, SelectField, TextareaField, TextField } from "@/components/ui/action-form";
 import { CONTRACT_TYPES, GENDERS, NATIONALITIES } from "@/lib/people/constants";
 

@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { Upload, X } from "lucide-react";
 import { ActionForm, SelectField, TextareaField, TextField } from "@/components/ui/action-form";
 import { Button } from "@/components/ui/button";
-import { createClient } from "@/lib/supabase/client";
+import { getBrowserClient } from "@/lib/supabase/lazy-client";
 import { saveCompanyDetails, saveLetterhead, setBrandingImage } from "@/lib/company/actions";
 
 type Opt = { value: string; label: string };
@@ -112,7 +112,7 @@ function ImageSlot({ kind, label, hint, url, businessId, canEdit }: { kind: "log
     if (file.size > 2 * 1024 * 1024) return toast.error("The image must be smaller than 2 MB.");
     setBusy(true);
     const path = `${businessId}/branding/${kind}-${Date.now()}.${TYPES[file.type]}`;
-    const { error } = await createClient().storage.from("tenant-files").upload(path, file, { contentType: file.type });
+    const { error } = await (await getBrowserClient()).storage.from("tenant-files").upload(path, file, { contentType: file.type });
     if (error) {
       setBusy(false);
       return toast.error("The upload didn't work. Check you can change company settings, then try again.");

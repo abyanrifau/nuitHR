@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-export const PAGE_SIZE = 25;
+export const PAGE_SIZE = 50;
 
 export interface PeopleFilters {
   q?: string;

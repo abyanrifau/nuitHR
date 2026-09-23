@@ -32,26 +32,29 @@ export default async function TimeOffCalendar(props: PageProps<"/app/time-off/ca
   const prev = iso(new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() - 1, 1))).slice(0, 7);
   const next = iso(new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 1))).slice(0, 7);
   const supabase = await createClient();
-  const { data: b } = await supabase.from("businesses").select("week_start, working_days").eq("id", active.business_id).single();
+  // Load a week either side of the month (whatever day the week starts on),
+  // so the settings and the time off can be fetched together.
+  const loadFrom = new Date(first.getTime() - 6 * 86400000);
+  const loadTo = new Date(last.getTime() + 6 * 86400000);
+  let q = supabase
+    .from("leave_requests")
+    .select("id, start_date, end_date, status, employee:employees(first_name, last_name, department_id), type:leave_types(name, color)")
+    .eq("business_id", active.business_id)
+    .in("status", sp.pending ? ["approved", "pending"] : ["approved"])
+    .lte("start_date", iso(loadTo))
+    .gte("end_date", iso(loadFrom));
+  const [{ data: b }, { data: leave }, { data: holidays }, { data: departments }] = await Promise.all([
+    supabase.from("businesses").select("week_start, working_days").eq("id", active.business_id).single(),
+    (q = q.order("start_date")),
+    supabase.from("public_holidays").select("holiday_date, name").eq("business_id", active.business_id).gte("holiday_date", iso(loadFrom)).lte("holiday_date", iso(loadTo)),
+    supabase.from("departments").select("id, name").eq("business_id", active.business_id).eq("is_active", true).order("name"),
+  ]);
   const weekStart = b?.week_start ?? 0;
   // Grid from the start of the week containing the 1st to the end of the week containing the last day.
   const gridStart = new Date(first.getTime() - ((first.getUTCDay() - weekStart + 7) % 7) * 86400000);
   const gridEnd = new Date(last.getTime() + ((weekStart + 6 - last.getUTCDay() + 7) % 7) * 86400000);
   const days: string[] = [];
   for (let d = gridStart; d <= gridEnd; d = new Date(d.getTime() + 86400000)) days.push(iso(d));
-
-  let q = supabase
-    .from("leave_requests")
-    .select("id, start_date, end_date, status, employee:employees(first_name, last_name, department_id), type:leave_types(name, color)")
-    .eq("business_id", active.business_id)
-    .in("status", sp.pending ? ["approved", "pending"] : ["approved"])
-    .lte("start_date", iso(gridEnd))
-    .gte("end_date", iso(gridStart));
-  const [{ data: leave }, { data: holidays }, { data: departments }] = await Promise.all([
-    (q = q.order("start_date")),
-    supabase.from("public_holidays").select("holiday_date, name").eq("business_id", active.business_id).gte("holiday_date", iso(gridStart)).lte("holiday_date", iso(gridEnd)),
-    supabase.from("departments").select("id, name").eq("business_id", active.business_id).eq("is_active", true).order("name"),
-  ]);
   const rows = (leave ?? [])
     .map((l) => ({ ...l, e: l.employee as unknown as { first_name: string; last_name: string; department_id: string | null }, t: l.type as unknown as { name: string; color: string } }))
     .filter((l) => !sp.department || l.e.department_id === sp.department);

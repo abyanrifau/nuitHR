@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { NotificationPrefs, TwoStepPanel } from "@/app/app/account/account-forms";
 import { signOut } from "@/lib/auth/actions";
-import { getStaffContext } from "@/lib/staff/context";
+import { getStaffContext, getStaffProfile } from "@/lib/staff/context";
 import { formatDate, fullName, initials } from "@/lib/format";
 import { notificationEvents } from "@/modules/access";
 import { MyContactForm, MyEmergencyContacts } from "../staff-client";
@@ -16,10 +16,11 @@ import { MyContactForm, MyEmergencyContacts } from "../staff-client";
 export const metadata: Metadata = { title: "Me" };
 
 export default async function StaffMe() {
-  const { active, ctx, me, supabase, user } = await getStaffContext();
-  const [{ data: contacts }, { data: prefs }] = await Promise.all([
-    me
-      ? supabase.from("employee_emergency_contacts").select("id, name, relationship, phone, is_primary").eq("employee_id", me.id).order("is_primary", { ascending: false }).order("name")
+  const { active, ctx, me: link, supabase, user } = await getStaffContext();
+  const [me, { data: contacts }, { data: prefs }] = await Promise.all([
+    getStaffProfile(),
+    link
+      ? supabase.from("employee_emergency_contacts").select("id, name, relationship, phone, is_primary").eq("employee_id", link.id).order("is_primary", { ascending: false }).order("name")
       : Promise.resolve({ data: [] }),
     supabase.from("notification_preferences").select("event_type, channel, enabled").eq("business_id", active.business_id).eq("user_id", user.id),
   ]);
